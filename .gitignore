@@ -1,0 +1,6 @@
+sdf.egg-info/
+libigl-python-bindings/
+__pycache__/
+.vscode/
+*.stl
+
