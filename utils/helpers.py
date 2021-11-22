@@ -7,7 +7,7 @@ def isnotebook():
 
         if shell == 'ZMQInteractiveShell':
             return True   # Jupyter notebook or qtconsole
-        elif method == "google.colab._shell":
+        elif module == "google.colab._shell":
             return True
         return False
     except NameError:
