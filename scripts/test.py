@@ -15,7 +15,10 @@ def main():
         import sdf
         import PyScaffolder
         import matplotlib
+        import torch_optimizer
         from tqdm import tqdm
+        import dotenv
+        import pretty_errors
 
         from utils.libs import igl
         print('Load all dependent modules: [OK]')

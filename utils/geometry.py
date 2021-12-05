@@ -162,15 +162,34 @@ class ImportanceSampler():
         I = self._subsample(s, N)
 
         #R = np.random.choice(len(U), int(N*0.1))
-        S = U[I,:]#np.concatenate((U[I,:],U[R, :]), axis=0)
+        S = U[I,:] #np.concatenate((U[I,:],U[R, :]), axis=0)
         return S
 
     ''' sampling against a supplied U set, where s is sdf at each U'''
     def sampleU(self, N, U, s):
         I = self._subsample(s, N)
-        q = U[I,:]
-        d = s[I]
-        return U[I,:], s[I] 
+        return U[I,:], s[I]
+
+class ImportanceImplicitSampler():
+    # M, initital uniform set size, N subset size.
+    def __init__(self, sdfs, beta=10):
+        if len(sdfs) <= 0:
+            raise ValueError('sdfs must be array with one item at least')
+        self.beta = beta # sample weight
+        # weighted by exp distance to surface
+        w = np.exp(-self.beta*np.abs(sdfs))
+        # probabilities to choose each
+        norm_w = w / (np.sum(w) + 1e-9)
+        # exclusive sum
+        self.bins = np.concatenate(([0],np.cumsum(norm_w)))
+        self.bins = self.bins[0:-1]
+ 
+
+    ''' importance sample a given mesh, M uniform samples, N subset based on importance'''
+    def sample(self, N):
+        R = np.random.rand(N)
+        I = np.array(np.digitize(R, self.bins)) - 1
+        return I
 
 class Mesh():
     _V = np.array([])

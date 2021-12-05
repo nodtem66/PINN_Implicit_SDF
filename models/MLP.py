@@ -37,9 +37,9 @@ class Davies2021(Base):
 class MLP_PINN(Davies2021, PINN):
     def __init__(self, loss_lambda=(1.0, 1.0), **kwarg):
         super().__init__(**kwarg)
-        self.loss_lambda = loss_lambda
+        self.loss_lambda = torch.tensor(loss_lambda, requires_grad=False)
 
-    def loss(self, pde_x, bc_x, bc_sdf):
-        self._loss = self.loss_lambda[0] * self.loss_PDE(pde_x)
+    def loss(self, y, residual_x, bc_x, bc_sdf):
+        self._loss = self.loss_lambda[0] * self.loss_PDE(y, residual_x)
         self._loss += self.loss_lambda[1] * self.loss_SDF(bc_x, bc_sdf)
         return self._loss

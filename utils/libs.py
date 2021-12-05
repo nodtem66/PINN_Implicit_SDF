@@ -1,7 +1,9 @@
 import sys
 import os
+import dotenv
 
 try:
+    dotenv.load_dotenv()
     iglpath = os.environ['PYIGL_PATH'] if 'PYIGL_PATH' in os.environ else ''
     iglpath = os.path.abspath(os.path.normpath(iglpath))
     if os.path.exists(iglpath):

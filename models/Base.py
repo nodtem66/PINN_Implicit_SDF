@@ -1,6 +1,8 @@
+from numpy import true_divide
 import torch
 from torch import nn
 from torch.nn.init import calculate_gain
+from utils import gradient
 
 def _calculate_gain(gain: any, index=0):
     if isinstance(gain, str):
@@ -31,20 +33,8 @@ class Base(nn.Module):
             nn.init.xavier_normal_(m.weight, gain=gain)
             m.bias.data.fill_(0.01)
 
-    def get_gradient(self, x):
-        _x = x.clone()
-        _x.requires_grad = True
-        F = self.forward(_x)
-        F_x = torch.autograd.grad(
-            F, _x,
-            grad_outputs=torch.ones_like(F),
-            create_graph=True, 
-        )[0]
-        return torch.linalg.norm(F_x, dim=1)
-
-
-    def get_gradient2(self, x):
-        _x = x.clone()
+    def get_gradient2(self, x, create_graph=True):
+        _x = x.detach().clone()
         _x.requires_grad = True
         F = self.forward(_x)
         Fx = torch.autograd.grad(
@@ -56,7 +46,7 @@ class Base(nn.Module):
         Fxx = torch.autograd.grad(
             Fx_norm, _x,
             grad_outputs=torch.ones_like(F),
-            create_graph=True,
+            create_graph=create_graph,
         )[0]
         #Fxx_norm = torch.linalg.norm(Fxx, dim=1)
         return Fxx
@@ -68,15 +58,24 @@ class Base(nn.Module):
         
         return errors
 
+    def test_gradient(self, x, true_gradient):
+        x.require_grad_(True)
+        y = self.forward(x)
+        Fx = torch.linalg.norm(gradient(y, x, create_graph=False), dim=1)
+        with torch.no_grad():
+            errors = self.loss_function(Fx, true_gradient)
+            return errors
+
 # Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations
 # Raissi, Maziar, Paris Perdikaris, and George E. Karniadakis
 class PINN(Base):
 
     def loss_SDF(self, x, sdf):
-        self._loss_SDF = self.loss_function(self.forward(x), sdf)
+        y = self.forward(x)
+        self._loss_SDF = self.loss_function(y, sdf)
         return self._loss_SDF
     
-    def loss_PDE(self, x):
-        Fx = self.get_gradient(x)
-        self._loss_PDE = self.loss_function(Fx, torch.ones_like(Fx))
+    def loss_PDE(self, y, x):
+        grad = gradient(y, x)
+        self._loss_PDE = self.loss_function(torch.linalg.norm(grad, dim=1), torch.ones(grad.shape[0], device=grad.device))
         return self._loss_PDE

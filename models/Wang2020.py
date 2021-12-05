@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from .MLP import Davies2021 as MLP
 from .Base import PINN
+from utils.helpers import gradient
 
 # Understanding and mitigating gradient pathologies in physics-informed neural networks
 # Sifan Wang, Yujun Teng, Paris Perdikaris
@@ -21,12 +22,12 @@ class LambdaAdaptive(PINN):
                 if isinstance(layer, nn.Linear):
                     self._nn_layers.append(layer)
 
-    def loss_PDE(self, x, adaptive_lambda=False):
+    def loss_PDE(self, y, x, adaptive_lambda=False):
         # calculate loss from residual points
         if adaptive_lambda:
             assert(hasattr(self, '_nn_layers'))
             self.zero_grad()
-        Fx = self.get_gradient(x)
+        Fx = torch.linalg.norm(gradient(y, x), dim=1)
         self._loss_PDE = self.loss_function(Fx, torch.ones_like(Fx))
         
         # get max of residual gradients
@@ -45,7 +46,8 @@ class LambdaAdaptive(PINN):
         if adaptive_lambda:
             assert(hasattr(self, '_nn_layers'))
             self.zero_grad()
-        self._loss_SDF = self.loss_function(self.forward(x), sdf)
+        y = self.forward(x)
+        self._loss_SDF = self.loss_function(y, sdf)
         # get mean of BC gradients
         if adaptive_lambda:
             self._loss_SDF.backward()
@@ -58,15 +60,12 @@ class LambdaAdaptive(PINN):
 
         return self._loss_SDF
         
-    def loss(self, pde_x, bc_x, bc_sdf, neumann_x=None, adaptive_lambda=False):
-        self._loss = self.loss_PDE(pde_x, adaptive_lambda)
-        self._loss += self.loss_lambda[0] * self.loss_SDF(bc_x, bc_sdf, adaptive_lambda)
-        return self._loss
 
-    def adaptive_lambda(self, pde_x, bc_x, bc_sdf):
-        self.loss_PDE(pde_x, adaptive_lambda=True)
+    def adaptive_lambda(self, y, pde_x, bc_x, bc_sdf):
+        self.loss_PDE(y, pde_x, adaptive_lambda=True)
         self.loss_SDF(bc_x, bc_sdf, adaptive_lambda=True)
         with torch.no_grad():
+            self.mean_grad_bc1 += 1e-9
             self.loss_lambda[0] = (self.alpha) * self.loss_lambda[0] + (1.0 - self.alpha) * (self.max_grad_residual / self.mean_grad_bc1)
 
 
@@ -75,22 +74,22 @@ class M2(MLP, LambdaAdaptive):
         super().__init__(**kwargs)
         self._add_nn_layers(self.model)
 
-    def loss(self, pde_x, bc_x, bc_sdf, adaptive_lambda=False):
-        
-        self._loss = self.loss_PDE(pde_x, adaptive_lambda)
+    def loss(self, y, pde_x, bc_x, bc_sdf, adaptive_lambda=False):
+        self._loss = self.loss_PDE(y, pde_x, adaptive_lambda)
         self._loss += self.loss_lambda[0] * self.loss_SDF(bc_x, bc_sdf, adaptive_lambda)
-        
-        return self._loss
-    
+        return self._loss    
     
 class M2_1(M2):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def adaptive_lambda(self, pde_x, bc_x, bc_sdf):
-        self.loss_PDE(pde_x, adaptive_lambda=True)
+    def adaptive_lambda(self, y, pde_x, bc_x, bc_sdf):
+        self.loss_PDE(y, pde_x, adaptive_lambda=True)
         self.loss_SDF(bc_x, bc_sdf, adaptive_lambda=True)
         with torch.no_grad():
+            self._loss_PDE += 1e-9
+            self._loss_SDF += 1e-9
+            self.mean_grad_bc1 += 1e-9
             new_lambda = (self.max_grad_residual/self._loss_PDE) / (self.mean_grad_bc1/self._loss_SDF)
             self.loss_lambda[0] = (self.alpha) * self.loss_lambda[0] + (1.0 - self.alpha) * new_lambda
 
@@ -117,19 +116,27 @@ class M4(LambdaAdaptive):
         self._u = self.Φ(self._nn_layers[0](input))
         self._v = self.Φ(self._nn_layers[1](input))
         h = self.Φ(self._nn_layers[2](input))
-        h = h * self._u + (1-h) * self._v
+        h = h * self._u + (torch.ones_like(h) - h) * self._v
         for i in range(self.N_layers):
             h = self.Φ(self._nn_layers[3+i](h))
-            h = h * self._u + (1-h) * self._v
+            h = h * self._u + (torch.ones_like(h)-h) * self._v
         return torch.squeeze(self.last_Φ(self._nn_layers[self.N_layers + 3](h)))
+
+    def loss(self, y, pde_x, bc_x, bc_sdf, adaptive_lambda=False):
+        self._loss = self.loss_PDE(y, pde_x, adaptive_lambda)
+        self._loss += self.loss_lambda[0] * self.loss_SDF(bc_x, bc_sdf, adaptive_lambda)
+        return self._loss
 
 class M4_1(M4):
     def __init__(self, **kwarg):
         super().__init__(**kwarg)
     
-    def adaptive_lambda(self, pde_x, bc_x, bc_sdf):
-        self.loss_PDE(pde_x, adaptive_lambda=True)
+    def adaptive_lambda(self, y,pde_x, bc_x, bc_sdf):
+        self.loss_PDE(y,pde_x, adaptive_lambda=True)
         self.loss_SDF(bc_x, bc_sdf, adaptive_lambda=True)
         with torch.no_grad():
+            self._loss_PDE += 1e-9
+            self._loss_SDF += 1e-9
+            self.mean_grad_bc1 += 1e-9
             new_lambda = (self.max_grad_residual/self._loss_PDE) / (self.mean_grad_bc1/self._loss_SDF)
             self.loss_lambda[0] = (self.alpha) * self.loss_lambda[0] + (1.0 - self.alpha) * new_lambda

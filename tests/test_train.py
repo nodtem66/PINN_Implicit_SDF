@@ -95,5 +95,25 @@ class TestTrainScript(unittest.TestCase):
             self.args += ['--model', '12']
             self.main(self.args)
 
+    def test_model_13(self):
+        with self.assertNotRaises(Exception):
+            self.args += ['--model', '13']
+            self.main(self.args)
+
+    def test_model_14(self):
+        with self.assertNotRaises(Exception):
+            self.args += ['--model', '14']
+            self.main(self.args)
+
+    def test_model_15(self):
+        with self.assertNotRaises(Exception):
+            self.args += ['--model', '15']
+            self.main(self.args)
+
+    def test_model_16(self):
+        with self.assertNotRaises(Exception):
+            self.args += ['--model', '16']
+            self.main(self.args)
+
 if __name__ == '__main__':
     unittest.main()
