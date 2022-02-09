@@ -29,29 +29,27 @@ class ImplicitDataset():
         These parameters will be passed to the sampling class
     """
     def __init__(
-        self, f, N=1000, step=0.01, offset=10, atol=0.01, beta=10,
+        self, f, N=1000, step=0.01, offset=10,
         output_stl='tmp.stl', device=None, from_file:str=None, from_dataset:dict=None,
         *args, **vargs
     ):
         super().__init__()
 
         # load dataset from npz
-        if from_file is not None:
-            dataset = np.load(from_file)
-            self.pde_points = dataset['pde_points']
-            self.bc_points = dataset['bc_points']
-            self.bc_sdfs = dataset['bc_sdfs']
-        elif from_dataset is not None:
-            self.pde_points = from_dataset['pde_points']
-            self.bc_points = from_dataset['bc_points']
-            self.bc_sdfs = from_dataset['bc_sdfs']
+        if from_file is not None or from_dataset is not None:
+            dataset = np.load(from_file) if from_file is not None else from_dataset
+            self.points = dataset['points']
+            self.sdfs = dataset['sdfs']
+            self.grads = dataset['grads']
+            self.true_sdfs = dataset['true_sdfs']
+            self.true_grads = dataset['true_grads']
         # otherwise generate from SDF
         else:
             if not isinstance(f, sdf.SDF3):
                 raise TypeError('Cannot init ImplicitDataset(f) because f is not sdf.SDF3 object')
             
 
-            _ndim = round((10*N)**(1/3))
+            _ndim = round(N**(1/3))
             if _ndim <= 0:
                 raise ValueError('N must be greater than or equal to 1')
 
@@ -61,38 +59,34 @@ class ImplicitDataset():
             X = np.linspace(x0-offset*dx, x1+offset*dx, _ndim, dtype=np.float32)
             Y = np.linspace(y0-offset*dy, y1+offset*dy, _ndim, dtype=np.float32)
             Z = np.linspace(y0-offset*dy, y1+offset*dy, _ndim, dtype=np.float32)
-            P = sdf.mesh._cartesian_product(X, Y, Z)
-
-            # Filter out |F(x)| > eps and set these points as Dirichlet boundary condition
-            lvl_set = f(P)
-            _mark = np.squeeze(np.isclose(lvl_set, np.zeros_like(lvl_set), atol=atol))
-            # Filter out |F(x)| < max - eps
-            #_max_sdf = np.max(lvl_set)
-            #_max_mark = np.squeeze(np.isclose(_max_sdf - lvl_set, np.zeros_like(lvl_set), atol=atol))
-            self.bc_points = P[_mark]
-            self.bc_sdfs = lvl_set[_mark].squeeze()
-
-            sampler = ImportanceImplicitSampler(lvl_set, beta=beta)
-            _mark = sampler.sample(N)
-            self.pde_points = P[_mark, :]
+            self.points = sdf.mesh._cartesian_product(X, Y, Z)
+            
+            lvl_set = f(self.points).reshape((_ndim, _ndim, _ndim))
+            dx = (X[1] - X[0], Y[1] - Y[0], Z[1] - Z[0])
+            import skfmm
+            sdfs = skfmm.distance(lvl_set, dx=dx, periodic=[True, True, True])
+            grad = np.array(np.gradient(sdfs, *dx))
+            self.sdfs = sdfs.reshape((_ndim**3,)).squeeze()
+            self.grads = grad.reshape((3, _ndim**3)).T
 
             try:
                 temp_filename = os.path.normpath(output_stl)
                 sdf.write_binary_stl(temp_filename, f.generate(step, verbose=False, method=1))
-            #     # calculate SDF of bc_points
-            #     _mesh = geometry.Mesh(temp_filename, doNormalize=True)
-            #     _SDF = geometry.SDF(_mesh)
-            #     self.bc_sdfs = _SDF.query(self.bc_points)
-            #     # sampling 3.5x of bc_points for residual points
-            #     _sampler = geometry.PointSampler(_mesh, ratio=1.0)
-            #     self.pde_points = _sampler.sample(math.ceil(3.5*len(self.bc_points)))
+                # Load mesh
+                v,f = igl.read_triangle_mesh(temp_filename)
+                self.true_sdfs, _, _ = igl.signed_distance(self.points, v, f, 4, return_normals=False)
+                self.true_grads = np.array(np.gradient(self.true_sdfs.reshape((_ndim, _ndim, _ndim)), *dx))
+                self.true_grads = self.true_grads.reshape((3, _ndim**3)).T
+
             except Exception as e:
                 print("warning: ", e)
 
         if device is not None:
-            self.pde_points = from_numpy(self.pde_points.astype(np.float32)).to(device)
-            self.bc_points = from_numpy(self.bc_points.astype(np.float32)).to(device)
-            self.bc_sdfs = from_numpy(self.bc_sdfs.astype(np.float32)).to(device)
+            self.points = from_numpy(self.points.astype(np.float32)).to(device)
+            self.sdfs = from_numpy(self.sdfs.astype(np.float32)).to(device)
+            self.grads = from_numpy(self.grads.astype(np.float32)).to(device)
+            self.true_sdfs = from_numpy(self.true_sdfs.astype(np.float32)).to(device)
+            self.true_grads = from_numpy(self.true_grads.astype(np.float32)).to(device)
 
     @classmethod
     def to_file(cls, *arg, **varg):
@@ -104,9 +98,11 @@ class ImplicitDataset():
         dataset = cls(*arg, **varg)
         np.savez_compressed(
             file,
-            pde_points=dataset.residual.points,
-            bc_points=dataset.bc.points,
-            bc_sdfs=dataset.bc.values
+            points=dataset.points,
+            sdfs=dataset.sdfs,
+            grads=dataset.grads,
+            true_sdfs=dataset.true_sdfs,
+            true_grads=dataset.true_grads,
         )
         return dataset
 
@@ -123,7 +119,7 @@ class ImplicitDataset():
         return cls(None, from_dataset=dataset, device=device)
 
     def __str__(self):
-        return 'ImplicitDataset (%d PDE points, %d Dirichlet BCs)' % (len(self.pde_points), len(self.bc_points))
+        return 'ImplicitDataset (%d points)' % (len(self.points))
 
 class ResidualDataset(Dataset):
     def __init__(self, points=None, device=None):
@@ -193,7 +189,7 @@ class RandomMeshSDFDataset(Dataset):
     **vargs
         These parameters will be passed to the sampling class
     """
-    def __init__(self, mesh_file, N=10000, sampling_method='uniform',
+    def __init__(self, mesh_file, N=10000, sampling_method='importance',
         from_file=None, from_dataset=None, device=None,
         *args, **vargs
     ):
@@ -280,7 +276,7 @@ class UniformMeshSDFDataset(Dataset):
     device: str
         torch device
     """
-    def __init__(self, mesh_file, N=1000000, from_file=None, from_dataset=None, device=None):
+    def __init__(self, mesh_file, N=1000000, offset=0, from_file=None, from_dataset=None, device=None):
         super().__init__()
         
         if from_file is not None:
@@ -310,9 +306,9 @@ class UniformMeshSDFDataset(Dataset):
             # Calculate step
             dx, dy, dz = np.abs(bv[0]-bv[-1]) / N
 
-            X = np.linspace(x0, x1, N, dtype=np.float32)
-            Y = np.linspace(y0, y1, N, dtype=np.float32)
-            Z = np.linspace(z0, z1, N, dtype=np.float32)
+            X = np.linspace(x0 - offset, x1 + offset, N, dtype=np.float32)
+            Y = np.linspace(y0 - offset, y1 + offset, N, dtype=np.float32)
+            Z = np.linspace(z0 - offset, z1 + offset, N, dtype=np.float32)
 
             self.points = sdf.mesh._cartesian_product(X, Y, Z)
             self.sdfs, _, _ = igl.signed_distance(self.points, v, f, 4, return_normals=False)
@@ -362,6 +358,100 @@ class UniformMeshSDFDataset(Dataset):
 
     def __str__(self):
         return 'UniformMeshSDFDataset (%d points)' % self.sdfs.shape[0]
+
+class OutsideMeshSDFDataset(Dataset):
+    """
+    Init dataset of outside points (SDF > 0 for IGL.sign_distance or SDF < 0 for FREP)
+    random uniform points from the bounding box * scale
+
+    Parameters
+    ----------
+    mesh_file: str
+        3D mesh file name
+    N: int
+        the number of samples (default: 10000)
+    scale: float
+        the number used to increase boundary of random point outside
+    from_file: str
+        npz path to load datset from file
+    device: str
+        torch device
+    """
+    def __init__(self, mesh_file, N=1000000, scale=2, from_file=None, from_dataset=None, device=None):
+        super().__init__()
+        
+        if from_file is not None:
+            dataset = np.load(from_file)
+            self.points = dataset['points']
+            self.sdfs = dataset['sdfs']
+        elif from_dataset is not None:
+            self.points = from_dataset['outside_points']
+            self.sdfs = from_dataset['outside_sdfs']
+        else:
+            if not os.path.exists(mesh_file):
+                raise ValueError(f'{mesh_file} did not exists')
+            
+            # Load mesh
+            v,f = igl.read_triangle_mesh(mesh_file)
+            
+            # Get bounding box
+            bv, bf = igl.bounding_box(v)
+            (x0, y0, z0), (x1, y1, z1) = bv[0]*scale, bv[-1]*scale
+
+            X = np.random.uniform(x0, x1, int(N*scale))
+            Y = np.random.uniform(y0, y1, int(N*scale))
+            Z = np.random.uniform(z0, z1, int(N*scale))
+
+            points = np.vstack((X,Y,Z)).T
+
+            sdfs, _, _ = igl.signed_distance(points, v, f, 4, return_normals=False)
+            mark = sdfs > 0
+            self.sdfs = sdfs[mark]
+            self.points = points[mark]
+            if mark.sum() > N:
+                mark = np.random.choice(self.points.shape[0], N, replace=False)
+                self.sdfs = self.sdfs[mark]
+                self.points = self.points[mark]
+        
+        if device is not None:
+            self.points = from_numpy(self.points.astype(np.float32)).to(device)
+            self.sdfs = from_numpy(self.sdfs.astype(np.float32)).to(device)
+
+    @classmethod
+    def to_file(cls, *arg, **kwarg):
+        if 'file' not in kwarg:
+            raise ValueError('file is None')
+        file = kwarg['file']
+        del kwarg['file']
+
+        dataset = cls(*arg, **kwarg)
+        np.savez_compressed(
+            file,
+            points=dataset.points,
+            sdfs=dataset.sdfs
+        )
+        return dataset
+
+    @classmethod
+    def from_file(cls, file=None, device=None):
+        if file is None:
+            raise ValueError('file is None')
+        return cls(None, from_file=file, device=device)
+    
+    @classmethod
+    def from_dataset(cls, dataset=None, device=None):
+        if dataset is None:
+            raise ValueError('dataset is None')
+        return cls(None, from_dataset=dataset, device=device)
+
+    def __len__(self):
+        return self.sdfs.shape[0]
+    
+    def __getitem__(self, idx):
+        return {"x": self.points[idx], "sdf": self.sdfs[idx]}
+
+    def __str__(self):
+        return 'OutsideMeshSDFDataset (%d points)' % self.sdfs.shape[0]
 
 class SliceDataset(Dataset):
     def __init__(self, mesh_file, N=100, from_file=None, device=None):
@@ -442,9 +532,10 @@ class TestDataset():
         dataset = np.load(npz_file)
         self.uniform = UniformMeshSDFDataset.from_dataset(dataset, device=device)
         self.random = RandomMeshSDFDataset.from_dataset(dataset, device=device)
+        self.outside = OutsideMeshSDFDataset.from_dataset(dataset, device=device)
     
     def __str__(self):
-        return f'TestDataset ({len(self.uniform)} points, {len(self.random)} points)'
+        return f'TestDataset ({len(self.uniform)} points, {len(self.random)} points, {len(self.outside)} points)'
 
 def generate_dataset(f, name=None, N_train=1e4, N_test=1e5, N_slice=100, step=0.01, save_dir=os.getcwd(), verbose=True) -> None:
     if name is None:
@@ -483,6 +574,13 @@ def generate_dataset(f, name=None, N_train=1e4, N_test=1e5, N_slice=100, step=0.
     if verbose:
         print(test_random_importance_dataset)
 
+    # Generate uniform test datasets with offset
+    test_outside_dataset = OutsideMeshSDFDataset(output_stl, N=int(N_test), scale=3)
+
+    if verbose:
+        print(test_outside_dataset)
+    
+
     # Merge and save dataset to npz
     np.savez_compressed(
         output_test_npz,
@@ -490,5 +588,42 @@ def generate_dataset(f, name=None, N_train=1e4, N_test=1e5, N_slice=100, step=0.
         sdfs=test_uniform_dataset.sdfs,
         gradients=test_uniform_dataset.gradients,
         random_points=test_random_importance_dataset.points,
-        random_sdfs=test_random_importance_dataset.sdfs
+        random_sdfs=test_random_importance_dataset.sdfs,
+        outside_points=test_outside_dataset.points,
+        outside_sdfs=test_outside_dataset.sdfs
     )
+
+
+def batch_loader(x, y=None, z=None, batch_size=None, num_batches=10):
+    assert(hasattr(x, 'shape'))
+    assert(len(x.shape) == 2)
+    total_length = x.shape[0]
+ 
+    if y is not None:
+        assert(total_length == y.shape[0])
+    
+    if z is not None:
+        assert(total_length == z.shape[0])
+
+    if batch_size is None:
+        batch_size = total_length // num_batches
+    
+    if y is not None:
+        if z is not None:
+            return (
+                (
+                    x[start:start+batch_size],
+                    y[start:start+batch_size],
+                    z[start:start+batch_size]
+                ) 
+                for start in range(0, total_length, batch_size)
+            )
+        return (
+            (
+                x[start:start+batch_size],
+                y[start:start+batch_size]
+            ) 
+            for start in range(0, total_length, batch_size)
+        )
+    
+    return (x[start:start+batch_size] for start in range(0, total_length, batch_size))

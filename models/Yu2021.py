@@ -1,6 +1,5 @@
-from typing import Iterable
+from math import floor
 import torch
-from torch import nn
 from .Base import PINN
 from .Wang2020 import LambdaAdaptive, M4, M4_1, M2, M2_1
 from .MLP import Davies2021, MLP_PINN

@@ -15,7 +15,6 @@ def main():
         import sdf
         import PyScaffolder
         import matplotlib
-        import torch_optimizer
         from tqdm import tqdm
         import dotenv
         import pretty_errors
