@@ -146,7 +146,7 @@ class GOPINN(Base):
         self._loss =  self.loss_SDF(x, sdf) + self.loss_PDE(x, loss_lambda=self.loss_lambda)
         return self._loss
 
-class M4(Base):
+class M4_old(Base):
     def __init__(self, width=32, N_layers=8, activation=torch.nn.Softplus(30), last_activation=torch.nn.Softplus(30), **kwarg):
         super().__init__(**kwarg)
         self._nn_layers = nn.ModuleList([nn.Linear(3, width), nn.Linear(3, width), nn.Linear(3, width)])
@@ -176,6 +176,37 @@ class M4(Base):
         self._loss =  self.loss_lambda * (self.loss_SDF(x, sdf, adaptive_lambda) + loss_grad) + loss_PDE
         return self._loss
 
+class M4(Base):
+
+    def __init__(self, width=32, N_layers=8, activation=torch.nn.Softplus(30), last_activation=torch.nn.Softplus(30), **kwarg):
+        super().__init__(**kwarg)
+        
+        self.width = width
+        self.N_layers = N_layers
+        
+        self.u = linear_layer_with_init(3, width, activation=activation)
+        self.v = linear_layer_with_init(3, width, activation=activation)
+        self.h = linear_layer_with_init(3, width, activation=activation)
+
+        self.h_list = []
+        for i in range(N_layers):
+            self.h_list.append(linear_layer_with_init(width, width, activation=activation))
+            self.add_module(f'h{i}', self.h_list[i])
+        
+        self.last_h = linear_layer_with_init(width, 1, activation=last_activation)
+        self.Φ = activation
+        self.last_Φ = last_activation
+
+    def forward(self, input):
+        _u = self.Φ(self.u(input))
+        _v = self.Φ(self.v(input))
+        h = self.Φ(self.h(input))
+        h = h * _u + (torch.ones_like(h) - h) * _v
+        for i in range(self.N_layers):
+            h = self.Φ(self.h_list[i](h))
+            h = h * _u + (torch.ones_like(h)-h) * _v
+        return torch.squeeze(self.Φ(self.last_h(h)))
+
 class M4_1(M4):
     def __init__(self, **kwarg):
         super().__init__(**kwarg)
@@ -189,34 +220,3 @@ class M4_1(M4):
             self.mean_grad_bc1 += 1e-9
             new_lambda = (self.max_grad_residual/self._loss_PDE) / (self.mean_grad_bc1/self._loss_SDF)
             self.loss_lambda = (self.alpha) * self.loss_lambda + (1.0 - self.alpha) * new_lambda
-
-class M4(Base):
-    def __init__(self, width=32, N_layers=8, activation=torch.nn.Softplus(30), last_activation=torch.nn.Softplus(30), **kwarg):
-        super().__init__(**kwarg)
-        self._nn_layers = [nn.Linear(3, width), nn.Linear(3, width), nn.Linear(3, width)]
-        self.width = width
-        self.N_layers = N_layers
-        self.Φ = activation
-        self.last_Φ = last_activation
-
-        self.u = linear_layer_with_init(3, width, activation=activation)
-        self.v = linear_layer_with_init(3, width, activation=activation)
-        self.h = linear_layer_with_init(3, width, activation=activation)
-
-        self.h_list = []
-        for i in range(N_layers):
-            self.h_list.append(linear_layer_with_init(width, width, activation=activation))
-            self.add_module(f'h{i}', self.h_list[i])
-        
-        self.last_h = linear_layer_with_init(width, 1, activation=last_activation)
-
-    def forward(self, input):
-        assert(len(self._nn_layers) == self.N_layers + 4)
-        _u = self.Φ(self.u(input))
-        _v = self.Φ(self.v(input))
-        h = self.Φ(self.h(input))
-        h = h * _u + (torch.ones_like(h) - h) * _v
-        for i in range(self.N_layers):
-            h = self.Φ(self._nn_layers[3+i](h))
-            h = h * _u + (torch.ones_like(h)-h) * _v
-        return torch.squeeze(self.Φ(self.last_h(h)))
