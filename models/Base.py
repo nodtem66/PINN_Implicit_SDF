@@ -1,9 +1,6 @@
-from numpy import true_divide
 import torch
 from torch import nn
-from torch.nn.init import calculate_gain
-from utils import gradient
-import math
+from utils.operator import gradient
 
 def activation_name(activation: nn.Module) -> str:
     if activation is nn.Tanh:
@@ -54,42 +51,122 @@ class Base(nn.Module):
 # Raissi, Maziar, Paris Perdikaris, and George E. Karniadakis
 class PINN(Base):
 
-    def loss_PDE(self, x, grad=None, loss_lambda=0.1):
-        y = self.forward(x)
+    def loss_residual(self, p):
+        """
+        Calculate residual from gradients, :attr:`p`
+
+        Args:
+        - :attr:`p`: tensor of gradient
+
+        Example:
+        ```
+        y = model(x)
         p = gradient(y, x)
+        model.loss_residual(p)
+        ```
+        """
         norm_p = torch.linalg.norm(p, dim=1)
         self._loss_residual = torch.mean((norm_p - 1)**2)
-        if grad is not None:
-            self._loss_grad = self.loss_function(p, grad)
-            self._loss_PDE = self._loss_grad + loss_lambda * self._loss_residual
-        else:
-            self._loss_PDE = loss_lambda * self._loss_residual
-        return self._loss_PDE
+        return self._loss_residual
 
-    def loss_SDF(self, x, sdf):
-        y = self.forward(x)
-        self._loss_SDF = self.loss_function(y, sdf)
+    def loss_residual_constraint(self, p):
+        """
+        Calculate loss from gradient, :attr:`p`
+
+        `ReLU(norm(p) - 1)`
+
+
+        Args:
+        - :attr:`p`: tensor of gradient
+
+        Example:
+        ```
+        y = model(x)
+        p = gradient(y, x)
+        model.loss_residual_constraint(p)
+        ```
+        """
+        norm_p = torch.linalg.norm(p, dim=1)
+        self._loss_residual_constraint = torch.mean(torch.nn.ReLU()(norm_p - 1))
+        return self._loss_residual_constraint
+
+    def loss_cosine_similarity(self, p, grad):
+        """
+        Calculate loss from gradient of model (:attr:`p`) and training data (:attr:`grad`)
+
+        `torch.dot(p,grad)/(norm(p)*norm(grad))`
+
+
+        Args:
+        - :attr:`p`: tensor of gradient
+        - :attr:`grad`: tensor of target gradient
+
+        Example:
+        ```
+        y = model(x)
+        p = gradient(y, x)
+        model.loss_cosine_similarity(p, grad)
+        ```
+        """
+        norm_p = torch.linalg.norm(p, dim=1)
+        norm_g = torch.linalg.norm(grad, dim=1)
+        self._loss_cosine_similarity = torch.mean(-torch.einsum('ij,ij->i', p, grad)/norm_p/norm_g)
+        return self._loss_cosine_similarity
+
+    def loss_SDF(self, y, sdf):
+        """
+        Calculate loss from predicted SDF from model (:attr:`y`)
+        and SDF from training data (:attr:`sdf`)
+
+        `MSE(y, sdf)`
+
+
+        Args:
+        - :attr:`y`: predicted SDF
+        - :attr:`sdf`: target SDF
+
+        Example:
+        ```
+        y = model(x)
+        model.loss_SDF(y, sdf)
+        ```
+        """
+        self._loss_SDF = torch.nn.MSELoss()(y, sdf)
         return self._loss_SDF
 
-# Neural Tangent Kernel in PyTorch
-# https://github.com/bobby-he/Neural_Tangent_Kernel/blob/master/src/NTK_net.py
-class LinearNeuralTangentKernel(nn.Linear): 
-    
-    def __init__(self, in_features, out_features, bias=True, beta=1.0, w_sig = 1):
-        self.beta = beta
-        super().__init__(in_features, out_features)
-        self.reset_parameters()
-        self.w_sig = w_sig
-      
-    def reset_parameters(self):
-        torch.nn.init.normal_(self.weight, mean=0, std=1)
-        if self.bias is not None:
-            torch.nn.init.normal_(self.bias, mean=0, std=1)
+    def loss_normal(self, p, grad):
+        """
+        Calculate loss from gradient of model (:attr:`p`) and training data (:attr:`grad`)
 
-    def forward(self, input):
-        return torch.nn.functional.linear(input, self.w_sig * self.weight/math.sqrt(self.in_features), self.beta * self.bias)
+        `MSE(p, (grad / norm(grad)))`
 
-    def extra_repr(self):
-        return 'in_features={}, out_features={}, bias={}, beta={}'.format(
-            self.in_features, self.out_features, self.bias is not None, self.beta
-        )
+        Args:
+        - :attr:`p`: predicted gradient
+        - :attr:`grad`: target gradient
+
+        Example:
+        ```
+        y = model(x)
+        p = gradient(y, x)
+        model.loss_normal(p, grad)
+        ```
+        """
+        norm_grad = torch.linalg.norm(grad, dim=1)
+        normal = grad / norm_grad
+        self._loss_normal = torch.nn.MSELoss()(p, normal)
+        return self._loss_normal
+
+    def loss(self, x, sdf, grad, residual_x=None):
+        y = self.forward(x)
+        p = gradient(y, x)
+        
+        if residual_x is not None:
+            residual_y = self.forward(residual_x)
+            residual_p = gradient(residual_y, residual_x)
+
+        self._loss = \
+            self.loss_SDF(y, sdf) + \
+            0.1 * self.loss_grad(p, grad) + \
+            0.2 * self.loss_max_residual(residual_p if residual_x is not None else p) + \
+            0.1 * self.loss_residual(residual_p if residual_x is not None else p)
+        return self._loss

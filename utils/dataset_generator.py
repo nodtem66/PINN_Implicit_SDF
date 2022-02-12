@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 
-import sdf
-from torch.utils.data import Dataset
-from torch import from_numpy
-import numpy as np
-from .libs import igl
-from .geometry import Mesh, SDF, PointSampler, ImportanceSampler, ImportanceImplicitSampler
-
 import os
+
+import numpy as np
+import sdf
+from torch import from_numpy
+from torch.utils.data import Dataset
+
+from .geometry import (SDF, ImportanceImplicitSampler, ImportanceSampler, Mesh,
+                       PointSampler)
+from .pyigl_import import igl
+
 
 class ImplicitDataset():
     """

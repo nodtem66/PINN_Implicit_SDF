@@ -137,3 +137,7 @@ dmypy.json
 # TensorboardX
 runs/
 tests/runs/
+
+# notebook tmp
+notebooks/tmp*
+notebooks/*.stl

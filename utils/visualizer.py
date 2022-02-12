@@ -6,9 +6,10 @@ import torch
 import time
 
 from matplotlib.colors import CenteredNorm
+from sdf.d3 import SDF3
 from sdf.mesh import _cartesian_product, _estimate_bounds
-from utils.dataset import SliceDataset
-from utils.helpers import gradient
+from .dataset_generator import SliceDataset
+from .operator import gradient
 
 
 class SDFVisualize:
@@ -35,7 +36,7 @@ class SDFVisualize:
         P = _cartesian_product(X, Y, Z).astype(np.float32)
         P = torch.from_numpy(P).to(self.device)
         P.requires_grad = True
-        sdf = model.forward(P)
+        sdf = model(P)
 
         _gradient = torch.linalg.norm(gradient(sdf, P), dim=1)
         
@@ -51,7 +52,7 @@ class SDFVisualize:
 
     def from_mesh(self, file, sign_type=4, title="true"):
 
-        from utils.libs import igl
+        from utils.pyigl_import import igl
 
         v, f = igl.read_triangle_mesh(file)
         bv, bf = igl.bounding_box(v)
@@ -61,6 +62,8 @@ class SDFVisualize:
 
         X = np.linspace(x0 - self.offset * dx, x1 + self.offset * dx, self.nums)
         Y = np.linspace(y0 - self.offset * dy, y1 + self.offset * dy, self.nums)
+        dx = X[1] - X[0]
+        dy = Y[1] - Y[0]
         dz = abs(z1 - z0) / (self.nums - 1)
         Z = np.array([self.z_level-dz, self.z_level, self.z_level+dz])
 
@@ -69,7 +72,7 @@ class SDFVisualize:
         sdf, _, _ = igl.signed_distance(P, v, f, sign_type, return_normals=False)
         sdf = sdf.reshape((self.nums, self.nums, 3))
 
-        gradient = np.linalg.norm(np.array(np.gradient(sdf, X[1] - X[0], Y[1] - Y[0], dz)), axis=0)
+        gradient = np.linalg.norm(np.array(np.gradient(sdf, dx, dy, dz)), axis=0)
 
         #gradient_2 = np.linalg.norm(np.array(np.gradient(gradient, X[1] - X[0], Y[1] - Y[0], dz)), axis=0)
 
@@ -102,6 +105,36 @@ class SDFVisualize:
         else:
             self._plot(sdf, _gradient, title='predict')
             self._plot(slice_dataset.sdfs.reshape((N, N)), true_gradient, title='true')
+
+    def from_implicit(self, f: SDF3, bounds=None, bounds_from_mesh=None, title:str="Implicit", fmm:bool=False) -> None:
+        dx, dy, dz = (self.step,) * 3
+        
+        if bounds is None:
+            if bounds_from_mesh is None:
+                bounds = _estimate_bounds(f)
+            else:
+                bounds = self._bounds_from_mesh(bounds_from_mesh)
+
+        (x0, y0, z0), (x1, y1, z1) = bounds
+
+        X = np.linspace(x0- self.offset*dx, x1+ self.offset*dx, self.nums)
+        Y = np.linspace(y0- self.offset*dy, y1+ self.offset*dy, self.nums)
+        dx = X[1] - X[0]
+        dy = Y[1] - Y[0]
+        dz = abs(z1 - z0) / (self.nums - 1)
+        Z = np.array([self.z_level-dz, self.z_level, self.z_level+dz])
+
+        P = _cartesian_product(X, Y, Z)
+        sdf = f(P)
+        sdf = sdf.reshape((self.nums, self.nums, 3))
+
+        if fmm:
+            import skfmm
+            sdf = skfmm.distance(sdf, dx=(dx,dy,dz))
+
+        gradient = np.linalg.norm(np.array(np.gradient(sdf, dx, dy, dz)), axis=0)
+
+        self._plot(sdf[:,:,1], gradient[:,:,1], title=title)
 
     def _plot(self, sdf, grad=None, grad2=None, title=""):
         figs = []
@@ -161,7 +194,7 @@ class SDFVisualize:
         return figs
 
     def _bounds_from_mesh(self, file):
-        from utils.libs import igl
+        from .pyigl_import import igl
 
         v, _ = igl.read_triangle_mesh(file)
         bv, _ = igl.bounding_box(v)

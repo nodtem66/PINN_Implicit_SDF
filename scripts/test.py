@@ -18,8 +18,11 @@ def main():
         from tqdm import tqdm
         import dotenv
         import pretty_errors
+        import skfmm
+        import torchinfo
+        import siren_pytorch
 
-        from utils.libs import igl
+        from utils.pyigl_import import igl
         print('Load all dependent modules: [OK]')
     except ImportError as e:
         print('Load all dependent modules: [Fail]')

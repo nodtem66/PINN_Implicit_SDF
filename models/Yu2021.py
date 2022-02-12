@@ -1,9 +1,9 @@
 from math import floor
 import torch
 from .Base import PINN
-from .Wang2020 import LambdaAdaptive, M4, M4_1, M2, M2_1
+from .Wang2020 import LambdaAdaptive, M4, M2
 from .MLP import Davies2021, MLP_PINN
-from utils.helpers import gradient
+from utils.operator import gradient
 
 # Gradient-enhanced physics-informed neural networks for forward and inverse PDE problems
 # Jeremy Yu, Lu Lu, Xuhui Meng, George Em Karniadakis

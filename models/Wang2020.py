@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from .MLP import Davies2021 as MLP
 from .Base import PINN, Base, linear_layer_with_init
-from utils.helpers import gradient
+from utils.operator import gradient
 
 # Understanding and mitigating gradient pathologies in physics-informed neural networks
 # Sifan Wang, Yujun Teng, Paris Perdikaris

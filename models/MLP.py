@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.functional import Tensor
 
-from utils.helpers import gradient
+from utils.operator import gradient
 
 from .Base import Base, PINN, linear_layer_with_init
 

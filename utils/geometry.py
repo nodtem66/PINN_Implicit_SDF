@@ -4,17 +4,16 @@
 # author: 
 # 
 # Modified by Jirawat to match the current-version pyigl (2.2) that use numpy instead of eigen
-from decimal import *
 import math
+from decimal import *
 
 import numpy as np
-
 from matplotlib import pyplot
 from mpl_toolkits.mplot3d import Axes3D
-
 from scipy.stats import gaussian_kde
 
-from utils.libs import igl
+from .pyigl_import import igl
+
 
 class PointSampler(): 
     def __init__(self, mesh, ratio = 0.0, std=0.0, verticeSampling=False, importanceSampling=False):
@@ -302,7 +301,7 @@ def plotCube(ax):
     # draw cube
     r = [-1, 1]
 
-    from itertools import product, combinations
+    from itertools import combinations, product
     for s, e in combinations(np.array(list(product(r, r, r))), 2):
         if np.sum(np.abs(s-e)) == r[1]-r[0]:
             ax.plot3D(*zip(s, e), color="black")
