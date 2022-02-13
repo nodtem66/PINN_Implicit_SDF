@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 
 from .geometry import (SDF, ImportanceImplicitSampler, ImportanceSampler, Mesh,
                        PointSampler)
-from .pyigl_import import igl
+from .external_import import igl
 
 
 class ImplicitDataset():

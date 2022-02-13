@@ -52,7 +52,7 @@ class SDFVisualize:
 
     def from_mesh(self, file, sign_type=4, title="true"):
 
-        from utils.pyigl_import import igl
+        from .external_import import igl
 
         v, f = igl.read_triangle_mesh(file)
         bv, bf = igl.bounding_box(v)
@@ -194,7 +194,7 @@ class SDFVisualize:
         return figs
 
     def _bounds_from_mesh(self, file):
-        from .pyigl_import import igl
+        from .external_import import igl
 
         v, _ = igl.read_triangle_mesh(file)
         bv, _ = igl.bounding_box(v)

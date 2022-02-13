@@ -12,7 +12,7 @@ from matplotlib import pyplot
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.stats import gaussian_kde
 
-from .pyigl_import import igl
+from .external_import import igl
 
 
 class PointSampler(): 

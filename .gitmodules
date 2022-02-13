@@ -1,0 +1,3 @@
+[submodule "scripts/external/kaolin"]
+	path = scripts/external/kaolin
+	url = https://github.com/NVIDIAGameWorks/kaolin.git

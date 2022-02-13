@@ -22,7 +22,7 @@ def main():
         import torchinfo
         import siren_pytorch
 
-        from utils.pyigl_import import igl
+        from utils.external_import import igl
         print('Load all dependent modules: [OK]')
     except ImportError as e:
         print('Load all dependent modules: [Fail]')
@@ -68,6 +68,31 @@ def main():
         print('Test pyigl SDF calculation: [OK]')
     except Exception as e:
         print('Test pyigl SDF calculation: [Fail]')
+        raise e
+
+    try:
+        from kaolin.metrics.pointcloud import chamfer_distance, f_score
+        p1 = torch.tensor([[[8.8977, 4.1709, 1.2839],
+                            [8.5640, 7.7767, 9.4214]],
+                            [[0.5431, 6.4495, 11.4914],
+                            [3.2126, 8.0865, 3.1018]]], device='cuda', dtype=torch.float)
+        p2 = torch.tensor([[[6.9340, 6.1152, 3.4435],
+                            [0.1032, 9.8181, 11.3350]],
+                            [[11.4006, 2.2154, 7.9589],
+                            [4.2586, 1.4133, 7.2606]]], device='cuda', dtype=torch.float)
+        chamfer_distance(p1, p2)
+        f_score(p1, p2, radius=0.5)
+
+        from kaolin.metrics.voxelgrid import iou
+        pred = torch.tensor([[[[0., 0.],
+                            [1., 1.]],
+                            [[1., 1.],
+                            [1., 1.]]]], device='cuda')
+        gt = torch.ones((1,2,2,2), device='cuda')
+        iou(pred, gt)
+        print('Test kaolin metrics: [OK]')
+    except Exception as e:
+        print('Test kaolin metrics: [Fail]')
         raise e
 
 if __name__ == '__main__':
