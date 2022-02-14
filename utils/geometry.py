@@ -14,6 +14,80 @@ from scipy.stats import gaussian_kde
 
 from .external_import import igl
 
+class Mesh():
+    _V = np.array([])
+    _F = np.array([])
+    _normalized = False
+
+    def __init__(
+        self, 
+        meshPath=None, 
+        V=None, 
+        F=None,
+        viewer = None, 
+        doNormalize = True):
+
+        if meshPath is None:
+            if V is None or F is None:
+                raise("Mesh path or Mesh data must be given")
+            else:
+                self._V = V
+                self._F = F
+        else:
+            self._loadMesh(meshPath,doNormalize)
+
+        self._viewer = viewer
+
+    def _loadMesh(self, fp, doNormalize):
+        #load mesh
+        self._V, self._F = igl.read_triangle_mesh(fp)
+
+        if doNormalize:
+            self._normalizeMesh()
+        
+    def V(self):
+        return self._V.copy()
+
+    def F(self):
+        return self._F.copy()
+
+    def _normalizeMesh(self):
+        bv, _ = igl.bounding_box(self._V)
+        center = np.sum(bv, axis=0)
+        self._V -= center
+
+    def bounding_box(self):
+        return igl.bounding_box(self._V)
+
+    def lower_upper_bounds(self):
+        bv, _ = igl.bounding_box(self._v)
+        (x0, y0, z0) = np.min(bv, axis=0)
+        (x1, y1, z1) = np.max(bv, axis=0)
+        return (x0, y0, z0), (x1, y1, z1)
+        
+    def show(self, doLaunch = True):
+        pass
+
+    def save(self, fp='out.obj'):
+        igl.write_triangle_mesh(fp, self._V, self._F, force_ascii=False)
+
+class SDF():
+    # Enum definitions
+    SIGNED_DISTANCE_TYPE_PSEUDONORMAL = 0           # Use fast pseudo-normal test [Bærentzen & Aanæs 2005]
+    SIGNED_DISTANCE_TYPE_WINDING_NUMBER = 1         # Use winding number [Jacobson, Kavan Sorking-Hornug 2013]
+    SIGNED_DISTANCE_TYPE_DEFAULT = 2
+    SIGNED_DISTANCE_TYPE_UNSIGNED = 3
+    SIGNED_DISTANCE_TYPE_FAST_WINDING_NUMBER = 4   # Use Fast winding number [Barill, Dickson, Schmidt, Levin, Jacobson 2018]
+
+    def __init__(self, mesh: Mesh, signType = SIGNED_DISTANCE_TYPE_FAST_WINDING_NUMBER):
+        assert(signType >= 0 and signType <= 4)
+        self._V = mesh.V()
+        self._F = mesh.F()
+        self._signType = signType
+
+    def query(self, queries):
+        """Returns numpy array of SDF values for each point in queries"""
+        return (igl.signed_distance(queries, self._V, self._F, self._signType, False)[0])
 
 class PointSampler(): 
     def __init__(self, mesh, ratio = 0.0, std=0.0, verticeSampling=False, importanceSampling=False):
@@ -190,79 +264,6 @@ class ImportanceImplicitSampler():
         I = np.array(np.digitize(R, self.bins)) - 1
         return I
 
-class Mesh():
-    _V = np.array([])
-    _F = np.array([])
-    _normalized = False
-
-    def __init__(
-        self, 
-        meshPath=None, 
-        V=None, 
-        F=None,
-        viewer = None, 
-        doNormalize = True):
-
-        if meshPath is None:
-            if V is None or F is None:
-                raise("Mesh path or Mesh data must be given")
-            else:
-                self._V = V
-                self._F = F
-        else:
-            self._loadMesh(meshPath,doNormalize)
-
-        self._viewer = viewer
-
-    def _loadMesh(self, fp, doNormalize):
-        #load mesh
-        self._V, self._F = igl.read_triangle_mesh(fp)
-
-        if doNormalize:
-            self._normalizeMesh()
-        
-    def V(self):
-        return self._V.copy()
-
-    def F(self):
-        return self._F.copy()
-
-    def _normalizeMesh(self):
-        bv, _ = igl.bounding_box(self._V)
-        center = np.sum(bv, axis=0)
-        diagonal =igl.bounding_box_diagonal(self._V)
-        #scale = 1.2 / diagonal * 2
-        
-        self._V -= center
-
-    def bounding_box():
-        pass
-
-    def show(self, doLaunch = True):
-        pass
-
-    def save(self, fp='out.obj'):
-        igl.write_triangle_mesh(fp, self._V, self._F, force_ascii=False)
-
-class SDF():
-    # Enum definitions
-    SIGNED_DISTANCE_TYPE_PSEUDONORMAL = 0           # Use fast pseudo-normal test [Bærentzen & Aanæs 2005]
-    SIGNED_DISTANCE_TYPE_WINDING_NUMBER = 1         # Use winding number [Jacobson, Kavan Sorking-Hornug 2013]
-    SIGNED_DISTANCE_TYPE_DEFAULT = 2
-    SIGNED_DISTANCE_TYPE_UNSIGNED = 3
-    SIGNED_DISTANCE_TYPE_FAST_WINDING_NUMBER = 4   # Use Fast winding number [Barill, Dickson, Schmidt, Levin, Jacobson 2018]
-
-    def __init__(self, mesh: Mesh, signType = SIGNED_DISTANCE_TYPE_FAST_WINDING_NUMBER):
-        assert(signType >= 0 and signType <= 4)
-        self._V = mesh.V()
-        self._F = mesh.F()
-        self._signType = signType
-
-    def query(self, queries):
-        """Returns numpy array of SDF values for each point in queries"""
-        return (igl.signed_distance(queries, self._V, self._F, self._signType, False)[0])
-
-
 def normSDF(S, minVal=None,maxVal=None):
     if minVal is None:
         minVal = np.min(S)
@@ -275,36 +276,46 @@ def normSDF(S, minVal=None,maxVal=None):
     #S[S>0] = (S[S>0] / maxVal)
     #S = (S + 1)/2
 
-    S[S<0] = -0.8
-    S[S>0] = 0.8
+    S[S<0] = -1.0
+    S[S>0] = 0.3
     
     return S
 
-def createAx(idx):
+def get_bounding_box_and_offset(v, scale_offset=1.0):
+    bv, _ = igl.bounding_box(v)
+    (x0, y0, z0) = np.min(bv, axis=0)
+    (x1, y1, z1) = np.max(bv, axis=0)
+    offset_x = abs(scale_offset*(x0-x1))
+    offset_y = abs(scale_offset*(y0-y1))
+    offset_z = abs(scale_offset*(z0-z1))
+    assert(x0 <= x1 and y0 <= y1 and z0 <= z1 and offset_x >= 0 and offset_y >= 0 and offset_z >= 0)
+    return (x0, y0, z0), (x1, y1, z1), (offset_x, offset_y, offset_z)
+
+def createAx(idx, lim=(-1,1)):
     subplot = pyplot.subplot(idx, projection='3d')
-    subplot.set_xlim((-1,1))
-    subplot.set_ylim((-1,1))
-    subplot.set_zlim((-1,1))
+    subplot.set_xlim(lim)
+    subplot.set_ylim(lim)
+    subplot.set_zlim(lim)
     subplot.view_init(elev=10, azim=100)
     subplot.axis('off')
     subplot.dist = 8
     return subplot
 
-def createAx2d(idx):
+def createAx2d(idx, xlim=(-1,1), ylim=(-1,1)):
     subplot = pyplot.subplot(idx)
-    subplot.set_xlim((-1,1))
-    subplot.set_ylim((-1,1))
+    subplot.set_xlim(xlim)
+    subplot.set_ylim(ylim)
     subplot.axis('off')
     return subplot
 
-def plotCube(ax):
+def plotCube(ax, lim=(-1, 1)):
     # draw cube
-    r = [-1, 1]
+    r = lim
 
     from itertools import combinations, product
     for s, e in combinations(np.array(list(product(r, r, r))), 2):
         if np.sum(np.abs(s-e)) == r[1]-r[0]:
-            ax.plot3D(*zip(s, e), color="black")
+            ax.plot3D(*zip(s, e), color="#ccc")
 
 def density(U):
     c = gaussian_kde(np.transpose(U))(np.transpose(U))
@@ -320,15 +331,16 @@ def plotSamples(ax, U, c, vmin = -1, is2d = False):
     x,y,z = np.hsplit(U,3)
     ax.scatter(x,y,z,c=c, marker='.',cmap='coolwarm', norm=None, vmin=vmin, vmax=1)
 
-def importanceSamplingComparisonPlot(mesh,sdf):
+def importanceSamplingComparisonPlot(mesh: Mesh,sdf: SDF):
     fig = pyplot.figure(figsize=(30,10))
-    axUniform = createAx(131)
-    axSurface = createAx(132)
-    axImportance = createAx(133)
+    lim=(-1.5, 1.5)
+    axUniform = createAx(131, lim=lim)
+    axSurface = createAx(132, lim=lim)
+    axImportance = createAx(133, lim=lim)
 
-    plotCube(axUniform)
-    plotCube(axSurface)
-    plotCube(axImportance)
+    plotCube(axUniform, lim=lim)
+    plotCube(axSurface, lim=lim)
+    plotCube(axImportance, lim=lim)
 
     
     #plotMesh(axUniform,mesh)
@@ -355,6 +367,54 @@ def importanceSamplingComparisonPlot(mesh,sdf):
     S = sdf.query(p)
     c = normSDF(S, np.min(SU), np.max(SU))
 
+    plotSamples(axImportance, p,c)
+
+    fig.patch.set_visible(False)
+
+    pyplot.axis('off')
+    pyplot.show()
+
+def QMCSamplingPlot(mesh: Mesh, sdf: SDF, scale=1.0):
+    from scipy.stats import qmc
+
+    fig = pyplot.figure(figsize=(30,10))
+    lim=(-1.5, 1.5)
+    axUniform = createAx(131, lim=lim)
+    axSurface = createAx(132, lim=lim)
+    axImportance = createAx(133, lim=lim)
+
+    plotCube(axUniform, lim=lim)
+    plotCube(axSurface, lim=lim)
+    plotCube(axImportance, lim=lim)
+
+    
+    # Get bounding box
+    bv, _ = mesh.bounding_box()
+    l_bounds = np.min(bv, axis=0)
+    u_bounds = np.max(bv, axis=0)
+    
+    # sampler = qmc.Halton(d=3, scramble=False)
+    # U = qmc.scale(sampler.random(n=10000), l_bounds=l_bounds, u_bounds=u_bounds)
+    # SU = sdf.query(U)
+    # c = normSDF(SU)
+    # plotSamples(axUniform, U,c)
+
+    sampler = qmc.Sobol(d=3, scramble=False)
+    p = qmc.scale(sampler.random_base2(m=math.ceil(math.log2(10000))), l_bounds=l_bounds, u_bounds=u_bounds)
+    S = sdf.query(p)
+    c = normSDF(S)
+    plotSamples(axUniform, p,c)
+
+    sampler = qmc.Sobol(d=3, scramble=False)
+    p = qmc.scale(sampler.random_base2(m=math.ceil(math.log2(10000))), l_bounds=l_bounds*2.0, u_bounds=u_bounds*2.0)
+    S = sdf.query(p)
+    c = normSDF(S)
+    plotSamples(axSurface, p,c)
+
+    sampler = qmc.Sobol(d=3, scramble=False)
+    p = qmc.scale(sampler.random_base2(m=math.ceil(math.log2(10000))), l_bounds=l_bounds*3.0, u_bounds=u_bounds*3.0)
+    S = sdf.query(p)
+    c = normSDF(S)
     plotSamples(axImportance, p,c)
 
     fig.patch.set_visible(False)

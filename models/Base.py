@@ -26,20 +26,20 @@ class Base(nn.Module):
     
     @torch.no_grad()
     def test(self, x, true_sdf):
-        sdf_predict = self.forward(x)
+        sdf_predict = self(x)
         return nn.MSELoss()(sdf_predict, true_sdf) # relative L2 norm of the error
 
-    def test_gradient(self, x, true_norm_grad):
+    def test_norm_gradient(self, x, true_norm_grad):
         x.requires_grad_(True)
-        y = self.forward(x)
+        y = self(x)
         norm_grad = torch.linalg.norm(gradient(y, x, create_graph=False), dim=1)
         x.requires_grad_(False)
         with torch.no_grad():
-            return nn.MSELoss(norm_grad, true_norm_grad)
+            return nn.MSELoss()(norm_grad, true_norm_grad)
 
     def test_residual(self, x):
         x.requires_grad_(True)
-        y = self.forward(x)
+        y = self(x)
         norm_grad = torch.linalg.norm(gradient(y, x, create_graph=False), dim=1)
         x.requires_grad_(False)
         with torch.no_grad():

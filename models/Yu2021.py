@@ -138,22 +138,7 @@ class M2_RAR(M2, ResidualAdaptive):
     def __init__(self, **kwarg):
         super().__init__(**kwarg)
 
-class M2_1_RAR(M2_1, ResidualAdaptive):
-    def __init__(self, **kwarg):
-        super().__init__(**kwarg)
 
 class M4_RAR(M4, ResidualAdaptive):
     def __init__(self, **kwarg):
         super().__init__(**kwarg)
-
-class M4_1_GPINN(LambdaAdaptive_G_PINN, M4_1):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-class M4_1_RAR(M4_1, ResidualAdaptive):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-class M4_1_GPINN_RAR(M4_1_GPINN, ResidualAdaptive):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)

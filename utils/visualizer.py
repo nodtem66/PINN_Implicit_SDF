@@ -8,29 +8,33 @@ import time
 from matplotlib.colors import CenteredNorm
 from sdf.d3 import SDF3
 from sdf.mesh import _cartesian_product, _estimate_bounds
+from utils.geometry import get_bounding_box_and_offset
 from .dataset_generator import SliceDataset
 from .operator import gradient
 
 
 class SDFVisualize:
-    def __init__(self, z_level=0, step=0.01, offset=30, nums=100, tag=None, writer=None, export=None, device="cpu"):
+    def __init__(self, z_level=0, scale_offset=1.0, nums=100, tag=None, writer=None, export=None, device="cpu"):
         self.z_level = z_level
-        self.offset = offset
+        self.scale_offset = scale_offset
         self.nums = nums
-        self.step = step
         self.tag = tag if tag is not None else str(int(time.time()))
         self.writer = writer
         self.device = device
         self.export = export
 
     def from_nn(self, model, bounds=[(-1, -1, -1), (1, 1, 1)], bounds_from_mesh=None, title="predict"):
-        dx, dy, dz = (self.step,) * 3
+        
         (x0, y0, z0), (x1, y1, z1) = (
             self._bounds_from_mesh(bounds_from_mesh) if not bounds_from_mesh is None else bounds
         )
+        offset_x = abs(self.scale_offset * (x0 - x1))
+        offset_y = abs(self.scale_offset * (y0 - y1))
+        offset_z = abs(self.scale_offset * (z0 - z1))
+        assert(x0 <= x1 and y0 <= y1 and z0 <= z1 and offset_x >= 0 and offset_y >= 0 and offset_z >= 0)
 
-        X = np.linspace(x0 - self.offset * dx, x1 + self.offset * dx, self.nums)
-        Y = np.linspace(y0 - self.offset * dy, y1 + self.offset * dy, self.nums)
+        X = np.linspace(x0 - offset_x, x1 + offset_x, self.nums)
+        Y = np.linspace(y0 - offset_y, y1 + offset_y, self.nums)
         Z = np.array([self.z_level])
 
         P = _cartesian_product(X, Y, Z).astype(np.float32)
@@ -55,13 +59,10 @@ class SDFVisualize:
         from .external_import import igl
 
         v, f = igl.read_triangle_mesh(file)
-        bv, bf = igl.bounding_box(v)
+        (x0, y0, z0), (x1, y1, z1), (offset_x, offset_y, offset_z) = get_bounding_box_and_offset(v, self.scale_offset)
 
-        dx, dy, dz = (self.step,) * 3
-        (x0, y0, z0), (x1, y1, z1) = bv[0], bv[-1]
-
-        X = np.linspace(x0 - self.offset * dx, x1 + self.offset * dx, self.nums)
-        Y = np.linspace(y0 - self.offset * dy, y1 + self.offset * dy, self.nums)
+        X = np.linspace(x0 - offset_x, x1 + offset_x, self.nums)
+        Y = np.linspace(y0 - offset_y, y1 + offset_y, self.nums)
         dx = X[1] - X[0]
         dy = Y[1] - Y[0]
         dz = abs(z1 - z0) / (self.nums - 1)
@@ -74,12 +75,16 @@ class SDFVisualize:
 
         gradient = np.linalg.norm(np.array(np.gradient(sdf, dx, dy, dz)), axis=0)
 
-        #gradient_2 = np.linalg.norm(np.array(np.gradient(gradient, X[1] - X[0], Y[1] - Y[0], dz)), axis=0)
-
         if self.writer is not None:
             self.writer.add_figure(self.tag + "/true_sdf", self._plot(sdf[:,:,0], gradient[:,:,0]), close=True)
         else:
             self._plot(sdf[:,:,1], gradient[:,:,1], title=title)
+
+    def compare_model_mesh(self, model:torch.nn.Module, mesh_file:str="", title:str="compare"):
+        from .external_import import igl
+
+        v, f = igl.read_triangle_mesh(mesh_file)
+        pass
 
 
     def from_dataset(self, model, filename):
@@ -106,19 +111,18 @@ class SDFVisualize:
             self._plot(sdf, _gradient, title='predict')
             self._plot(slice_dataset.sdfs.reshape((N, N)), true_gradient, title='true')
 
-    def from_implicit(self, f: SDF3, bounds=None, bounds_from_mesh=None, title:str="Implicit", fmm:bool=False) -> None:
-        dx, dy, dz = (self.step,) * 3
+    def from_implicit(self, f: SDF3, bounds=((-1, -1, -1), (1, 1, 1)), bounds_from_mesh=None, title:str="Implicit", fmm:bool=False) -> None:
         
-        if bounds is None:
-            if bounds_from_mesh is None:
-                bounds = _estimate_bounds(f)
-            else:
-                bounds = self._bounds_from_mesh(bounds_from_mesh)
+        (x0, y0, z0), (x1, y1, z1) = (
+            self._bounds_from_mesh(bounds_from_mesh) if not bounds_from_mesh is None else bounds
+        )
+        offset_x = abs(self.scale_offset * (x0 - x1))
+        offset_y = abs(self.scale_offset * (y0 - y1))
+        offset_z = abs(self.scale_offset * (z0 - z1))
+        assert(x0 <= x1 and y0 <= y1 and z0 <= z1 and offset_x >= 0 and offset_y >= 0 and offset_z >= 0)
 
-        (x0, y0, z0), (x1, y1, z1) = bounds
-
-        X = np.linspace(x0- self.offset*dx, x1+ self.offset*dx, self.nums)
-        Y = np.linspace(y0- self.offset*dy, y1+ self.offset*dy, self.nums)
+        X = np.linspace(x0- offset_x, x1+ offset_x, self.nums)
+        Y = np.linspace(y0- offset_y, y1+ offset_y, self.nums)
         dx = X[1] - X[0]
         dy = Y[1] - Y[0]
         dz = abs(z1 - z0) / (self.nums - 1)
@@ -145,6 +149,7 @@ class SDFVisualize:
 
         fig1, ax = plt.subplots()
         plt.pcolormesh(sdf, cmap="coolwarm", norm=CenteredNorm())
+        #plt.pcolormesh(sdf, cmap="coolwarm", vmin=-0.1, vmax=0.7)
         plt.colorbar()
         ax.set_title(title + " SDF\n(min=%.6f max=%.6f)" % (np.min(sdf), np.max(sdf)))
         ax.tick_params(axis="both", which="major", labelsize=6)
@@ -197,8 +202,8 @@ class SDFVisualize:
         from .external_import import igl
 
         v, _ = igl.read_triangle_mesh(file)
-        bv, _ = igl.bounding_box(v)
-        return (bv[0], bv[-1])
+        b0, b1, offset = get_bounding_box_and_offset(v)
+        return b0, b1
 
 def plot_residual(model, bounds=[(-1, -1, -1), (1, 1, 1)], title="residual", device='cpu', z_level=0.0, nx=100, ny=100):
 
