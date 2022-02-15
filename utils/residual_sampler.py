@@ -1,4 +1,7 @@
+import math
 import torch
+import numpy as np
+from scipy.stats import qmc
 from .operator import gradient
 
 @torch.no_grad()
@@ -70,3 +73,41 @@ def random_points_from_residual(net, num_points=1000, grid_points=None):
     mask = torch.rand((_num_randoms,), device=device) > likelihood
     points = points[mask]
     return points[:num_points]
+
+class ResidualSampler():
+    def __init__(self, model: torch.nn.Module, l_bounds=(-1, -1, -1), u_bounds=(1, 1, 1), num_grid_points=100*100*100, device='cpu'):
+        # Variables in numpy 
+        self.sampler = qmc.Sobol(d=3, scramble=False)
+        self.l_bounds = l_bounds
+        self.u_bounds = u_bounds
+        self.num_grid_points = 2 ** math.ceil(math.log2(num_grid_points))
+        # Variables in torch
+        self.model = model
+        self.device =device
+
+    def set_bounds_from_points(self, points: torch.Tensor) -> None:
+        self.device = points.device
+        _min, _max = bounding_box(points)
+        self.l_bounds = _min.cpu().detach().numpy()
+        self.u_bounds = _max.cpu().detach().numpy()
+        self.sampler.reset()
+    
+    def expand_bounds(self, scale_offset:float=0.1) -> None:
+        radius_offset = 0.5 * np.abs(self.u_bounds - self.l_bounds) * scale_offset 
+        self.l_bounds -= radius_offset
+        self.u_bounds += radius_offset
+        self.sampler.reset()
+
+    def random(self, n=100) -> torch.Tensor:
+        grid_points = self.sampler.random(n=self.num_grid_points)
+        grid_points = qmc.scale(grid_points, l_bounds=self.l_bounds, u_bounds=self.u_bounds)
+        grid_points = torch.from_numpy(grid_points.astype(np.float32)).to(self.device)
+        return random_points_from_residual(self.model, num_points=n, grid_points=grid_points)
+
+    def append_random_totensor(self, source: torch.Tensor, n=100) -> torch.Tensor:
+        points = self.random(n=n)
+        with torch.no_grad():
+            return torch.cat((source, points), 0)
+
+    def __str__(self):
+        return f'ResidualSampler(l_bounds={self.l_bounds}, u_bounds={self.u_bounds}, num_grid_points={self.num_grid_points})'

@@ -155,17 +155,14 @@ class PINN(Base):
         self._loss_normal = torch.nn.MSELoss()(p, normal)
         return self._loss_normal
 
-    def loss(self, x, sdf, grad, residual_x=None):
-        y = self.forward(x)
-        p = gradient(y, x)
-        
-        if residual_x is not None:
-            residual_y = self.forward(residual_x)
-            residual_p = gradient(residual_y, residual_x)
-
-        self._loss = \
-            self.loss_SDF(y, sdf) + \
-            0.1 * self.loss_grad(p, grad) + \
-            0.2 * self.loss_max_residual(residual_p if residual_x is not None else p) + \
-            0.1 * self.loss_residual(residual_p if residual_x is not None else p)
-        return self._loss
+    def print_loss(self, verbose=False) -> None:
+        keys = ['_loss_SDF', '_loss_residual', '_loss_residual_constraint', '_loss_normal', '_loss_cosine_similarity']
+        _loss_str = 'Loss: ' 
+        for key in keys:
+            if hasattr(self, key):
+                _loss_str += f'{getattr(self, key):.6f} '
+            else:
+                _loss_str += 'na '
+        if verbose:
+            print(_loss_str)
+        return _loss_str

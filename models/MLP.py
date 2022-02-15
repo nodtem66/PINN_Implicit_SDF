@@ -40,42 +40,39 @@ class Davies2021(Base):
         return self._loss
     
 
-class MLP_PINN(Davies2021):
-    def __init__(self, loss_lambda=0.1, **kwarg):
+class MLP_PINN(Davies2021, PINN):
+    def __init__(self, loss_lambda={}, **kwarg):
         super().__init__(**kwarg)
         self.loss_lambda = loss_lambda
 
-    def loss_PDE(self, x, grad):
-        y = self.forward(x)
+    def loss(self, x, sdf, residual_x=None):
+        y = self(x)
         p = gradient(y, x)
-        norm_p = torch.linalg.norm(p, dim=1)
-        self._loss_grad = self.loss_function(p, grad)
-        self._loss_residual =  torch.mean((norm_p - 1)**2)
-        self._loss_PDE = self._loss_grad + self.loss_lambda * self._loss_residual
-        return self._loss_PDE
+        
+        if residual_x is not None:
+            residual_y = self(residual_x)
+            residual_p = gradient(residual_y, residual_x)
+        return self.loss_SDF(y, sdf) + 0.1 * self.loss_residual(residual_p if residual_x is not None else p)
 
-    def loss_SDF(self, x, sdf):
-        y = self.forward(x)
-        self._loss_SDF = self.loss_function(y, sdf)
-        return self._loss_SDF
-
-    def loss(self, x, sdf, grad):
-        #self._loss = self.loss_lambda[0] * self.loss_PDE(y, x)
-        #self._loss = self.loss_lambda[1] * self.loss_SDF(y, sdf)
-        #self._loss = self.loss_SDF(y, sdf)
-        self._loss = self.loss_SDF(x, sdf) + self.loss_PDE(x, grad)
-        return self._loss
-
-class MLP_PINN_dot(MLP_PINN):
-    def __init__(self, **kwarg):
-        super().__init__(**kwarg)
-
-    def loss_PDE(self, x, grad):
-        y = self.forward(x)
+    def loss_with_normal(self, x, sdf, grad, residual_x=None):
+        y = self(x)
         p = gradient(y, x)
-        norm_p = torch.linalg.norm(p, dim=1)
-        norm_g = torch.linalg.norm(grad, dim=1)
-        self._loss_dot = torch.mean(-torch.einsum('ij,ij->i', p, grad)/norm_p/norm_g)
-        self._loss_residual =  torch.mean((norm_p - 1)**2)
-        self._loss_PDE = self._loss_dot + self.loss_lambda * self._loss_residual
-        return self._loss_PDE
+        
+        if residual_x is not None:
+            residual_y = self(residual_x)
+            residual_p = gradient(residual_y, residual_x)
+
+        return self.loss_SDF(y, sdf) + \
+            self.loss_lambda.get('loss_normal', 1.0) * self.loss_normal(p, grad) + \
+            self.loss_lambda.get('loss_residual', 1.0) * self.loss_residual(residual_p if residual_x is not None else p)
+            #self.loss_lambda.get('loss_residual_constraint', 1.0) * self.loss_residual_constraint(residual_p if residual_x is not None else p) + \
+
+    def loss_with_cosine_similarity(self, x, sdf, grad, residual_x=None):
+        y = self(x)
+        p = gradient(y, x)
+        if residual_x is not None:
+            residual_p = gradient(self(residual_x), residual_x)
+        
+        return self.loss_SDF(y, sdf) + \
+            self.loss_lambda.get('loss_cosine_similarity', 1.0) * self.loss_cosine_similarity(p, grad) + \
+            self.loss_lambda.get('loss_residual', 1.0) * self.loss_residual(residual_p if residual_x is not None else p)

@@ -506,6 +506,7 @@ def generate_dataset(f, name=None, N_train=1e4, N_test=1e5, N_slice=100, save_di
     )
 
 
+@torch.no_grad()
 def batch_loader(*args, batch_size=None, num_batches:int=10):
     """
     Fast batch loader without collate_fn

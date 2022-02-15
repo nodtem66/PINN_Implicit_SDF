@@ -2,15 +2,33 @@
 
 import torch
 
+from .residual_sampler import ResidualSampler
+
 class CallbackScheduler():
-    def __init__(self, callback=[], optimizer=None, model=None, eps=1e-6, patience=100):
+    def __init__(
+            self, callback=[],
+            optimizer:torch.optim.Optimizer=None,
+            model:torch.nn.Module=None,
+            residual_sampler:ResidualSampler=None,
+            residual_points:torch.Tensor=None,
+            eps=1e-6, patience:int=100
+        ):
+        # variables used in run_callback
         self._callback = callback
         self._step = 0
-        self._loss = 1e6
+        
+        # variables used in step_loss
         self._eps = eps
-        self._model = model
+        self._loss = 1e6
         self._max_patience = patience
         self._countdown = patience
+        
+        # local access to model, and sampler
+        self._model = model
+        self._residual_sampler = residual_sampler
+        
+        # public access
+        self.residual_points = residual_points
         self.optimizer = optimizer
         for g in self.optimizer.param_groups:
             self.lr = g['lr']
@@ -79,13 +97,26 @@ class CallbackScheduler():
             )
             self.lr = vargs['lr']
         return _init
-    
-    
+
     @staticmethod
     def nothing():
         def void(self):
             pass
         return void
-    
+
+    @staticmethod
+    def adaptive_residual_sampling(num_points=10000, expand_scale_ratio=None):
+        # used in residual-based adaptive refinement (RAR)
+        def callback(self):
+            if not hasattr(self, '_residual_scale_offset'):
+                self._residual_scale_offset = 1.0
+            if expand_scale_ratio is not None:
+                self._residual_scale_offset *= expand_scale_ratio
+                self._residual_sampler.expand_bounds(scale_offset=self._residual_scale_offset)
+
+            if self._residual_sampler is not None:
+                self.residual_points = self._residual_sampler.append_random_totensor(source=self.residual_points, n=num_points)
+        return callback
+
     def __str__(self):
         return "LR Scheduler (%d callbacks)" % len(self._callback)
