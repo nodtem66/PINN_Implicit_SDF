@@ -44,6 +44,18 @@ class Base(nn.Module):
         x.requires_grad_(False)
         with torch.no_grad():
             return torch.mean((norm_grad - 1).abs())
+    
+    def print_loss(self, verbose=False) -> None:
+        keys = ['_loss', '_loss_SDF', '_loss_residual', '_loss_residual_constraint', '_loss_normal', '_loss_cosine_similarity']
+        _loss_str = 'Loss: ' 
+        for key in keys:
+            if hasattr(self, key):
+                _loss_str += f'{getattr(self, key):.6f} '
+            else:
+                _loss_str += 'na '
+        if verbose:
+            print(_loss_str)
+        return _loss_str
 
 
 # Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations
@@ -154,15 +166,3 @@ class PINN(Base):
         normal = grad / norm_grad
         self._loss_normal = torch.nn.MSELoss()(p, normal)
         return self._loss_normal
-
-    def print_loss(self, verbose=False) -> None:
-        keys = ['_loss_SDF', '_loss_residual', '_loss_residual_constraint', '_loss_normal', '_loss_cosine_similarity']
-        _loss_str = 'Loss: ' 
-        for key in keys:
-            if hasattr(self, key):
-                _loss_str += f'{getattr(self, key):.6f} '
-            else:
-                _loss_str += 'na '
-        if verbose:
-            print(_loss_str)
-        return _loss_str

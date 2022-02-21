@@ -51,13 +51,13 @@ class CallbackScheduler():
 
     def step_when(self, condition=True, verbose=False):
         if condition:
-            if verbose:
-                print('Learning rate changed')
-            self.run_callback()
+            self.run_callback(verbose=verbose)
     
-    def run_callback(self):
+    def run_callback(self, verbose=False):
         if len(self._callback) > self._step:
             if callable(self._callback[self._step]):
+                if verbose:
+                    print('[callback scheduler]: ', self._callback[self._step].__code__.co_name)
                 self._callback[self._step](self)
         self._step += 1
 
@@ -82,32 +82,32 @@ class CallbackScheduler():
 
     @staticmethod
     def reduce_lr(ratio=0.1):
-        def _r(self):
+        def reduce_learning_rate(self):
             for g in self.optimizer.param_groups:
                 g['lr'] *= ratio
             self.lr *= ratio
-        return _r
+        return reduce_learning_rate
 
     @staticmethod
     def init_LBFGS(**vargs):
-        def _init(self):
+        def init_LBFGS_optimizer(self):
             self.optimizer = torch.optim.LBFGS(
                 self._model.parameters(),
                 **vargs
             )
             self.lr = vargs['lr']
-        return _init
+        return init_LBFGS_optimizer
 
     @staticmethod
     def nothing():
-        def void(self):
+        def do_nothing(self):
             pass
-        return void
+        return do_nothing
 
     @staticmethod
     def adaptive_residual_sampling(num_points=10000, expand_scale_ratio=None):
         # used in residual-based adaptive refinement (RAR)
-        def callback(self):
+        def residual_sampling(self):
             if not hasattr(self, '_residual_scale_offset'):
                 self._residual_scale_offset = 1.0
             if expand_scale_ratio is not None:
@@ -116,7 +116,7 @@ class CallbackScheduler():
 
             if self._residual_sampler is not None:
                 self.residual_points = self._residual_sampler.append_random_totensor(source=self.residual_points, n=num_points)
-        return callback
+        return residual_sampling
 
     def __str__(self):
         return "LR Scheduler (%d callbacks)" % len(self._callback)

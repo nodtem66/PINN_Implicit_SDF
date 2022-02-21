@@ -49,6 +49,7 @@ class ImplicitDataset(Dataset):
             self.grads = dataset['grads']
             self.true_sdfs = dataset['true_sdfs']
             self.true_grads = dataset['true_grads']
+            self.true_normals = dataset['true_normals']
         # otherwise generate from SDF
         else:
             if not isinstance(f, sdf.SDF3):
@@ -83,7 +84,7 @@ class ImplicitDataset(Dataset):
                 sdf.write_binary_stl(temp_filename, f.generate(step=dx[0], verbose=False, method=1))
                 # Load mesh
                 v,f = igl.read_triangle_mesh(temp_filename)
-                self.true_sdfs, _, _ = igl.signed_distance(self.points, v, f, 4, return_normals=False)
+                self.true_sdfs, _, _, self.true_normals = igl.signed_distance(self.points, v, f, 0, return_normals=True)
                 self.true_grads = np.array(np.gradient(self.true_sdfs.reshape((_ndim, _ndim, _ndim)), *dx))
                 self.true_grads = self.true_grads.reshape((3, _ndim**3)).T
 
@@ -96,6 +97,7 @@ class ImplicitDataset(Dataset):
             self.grads = from_numpy(self.grads.astype(np.float32)).to(device)
             self.true_sdfs = from_numpy(self.true_sdfs.astype(np.float32)).to(device)
             self.true_grads = from_numpy(self.true_grads.astype(np.float32)).to(device)
+            self.true_normals = from_numpy(self.true_normals.astype(np.float32)).to(device)
 
     @classmethod
     def to_file(cls, *arg, **varg):
@@ -112,6 +114,7 @@ class ImplicitDataset(Dataset):
             grads=dataset.grads,
             true_sdfs=dataset.true_sdfs,
             true_grads=dataset.true_grads,
+            true_normals=dataset.true_normals,
         )
         return dataset
 
@@ -139,7 +142,8 @@ class ImplicitDataset(Dataset):
             "sdf": self.sdfs[idx],
             "grad": self.grads[idx],
             "true_sdf": self.true_sdfs[idx],
-            "true_grad": self.true_grads[idx]
+            "true_grad": self.true_grads[idx],
+            "true_normal": self.true_normals[idx],
         }
 
 class RandomMeshSDFDataset(Dataset):
