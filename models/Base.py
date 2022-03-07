@@ -2,18 +2,20 @@ import torch
 from torch import nn
 from utils.operator import gradient
 
+
 def activation_name(activation: nn.Module) -> str:
     if activation is nn.Tanh:
-        return 'tanh'
+        return "tanh"
     elif activation is nn.ReLU or activation is nn.ELU or activation is nn.GELU:
-        return 'relu'
+        return "relu"
     elif activation is nn.SELU:
-        return 'selu'
+        return "selu"
     elif activation is nn.LeakyReLU:
-        return 'leaky_relu'
+        return "leaky_relu"
     elif activation is nn.Sigmoid:
-        return 'sigmoid'
-    return 'linear'
+        return "sigmoid"
+    return "linear"
+
 
 def linear_layer_with_init(width, height, init=nn.init.xavier_uniform_, activation=None) -> nn.Linear:
     linear = nn.Linear(width, height)
@@ -22,12 +24,16 @@ def linear_layer_with_init(width, height, init=nn.init.xavier_uniform_, activati
     init(linear.weight, gain=nn.init.calculate_gain(activation_name(activation)))
     return linear
 
+
 class Base(nn.Module):
-    
+    @torch.no_grad()
+    def predict(self, x):
+        return self(x)
+
     @torch.no_grad()
     def test(self, x, true_sdf):
         sdf_predict = self(x)
-        return nn.MSELoss()(sdf_predict, true_sdf) # relative L2 norm of the error
+        return nn.MSELoss()(sdf_predict, true_sdf)  # relative L2 norm of the error
 
     def test_norm_gradient(self, x, true_norm_grad):
         x.requires_grad_(True)
@@ -44,15 +50,22 @@ class Base(nn.Module):
         x.requires_grad_(False)
         with torch.no_grad():
             return torch.mean((norm_grad - 1).abs())
-    
+
     def print_loss(self, verbose=False) -> None:
-        keys = ['_loss', '_loss_SDF', '_loss_residual', '_loss_residual_constraint', '_loss_normal', '_loss_cosine_similarity']
-        _loss_str = 'Loss: ' 
+        keys = [
+            "_loss",
+            "_loss_SDF",
+            "_loss_residual",
+            "_loss_residual_constraint",
+            "_loss_normal",
+            "_loss_cosine_similarity",
+        ]
+        _loss_str = "Loss: "
         for key in keys:
             if hasattr(self, key):
-                _loss_str += f'{getattr(self, key):.6f} '
+                _loss_str += f"{getattr(self, key):.6f} "
             else:
-                _loss_str += 'na '
+                _loss_str += "na "
         if verbose:
             print(_loss_str)
         return _loss_str
@@ -61,7 +74,6 @@ class Base(nn.Module):
 # Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations
 # Raissi, Maziar, Paris Perdikaris, and George E. Karniadakis
 class PINN(Base):
-
     def loss_residual(self, p):
         """
         Calculate residual from gradients, :attr:`p`
@@ -77,7 +89,7 @@ class PINN(Base):
         ```
         """
         norm_p = torch.linalg.norm(p, dim=1)
-        self._loss_residual = torch.mean((norm_p - 1)**2)
+        self._loss_residual = torch.mean((norm_p - 1) ** 2)
         return self._loss_residual
 
     def loss_residual_constraint(self, p):
@@ -121,7 +133,7 @@ class PINN(Base):
         """
         norm_p = torch.linalg.norm(p, dim=1)
         norm_g = torch.linalg.norm(grad, dim=1)
-        self._loss_cosine_similarity = torch.mean(-torch.einsum('ij,ij->i', p, grad)/norm_p/norm_g)
+        self._loss_cosine_similarity = torch.mean(-torch.einsum("ij,ij->i", p, grad) / norm_p / norm_g)
         return self._loss_cosine_similarity
 
     def loss_SDF(self, y, sdf):

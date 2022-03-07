@@ -3,32 +3,19 @@
 # Add parent directory into system path
 import sys
 import os
+from math import ceil
+
+from numpy import NaN
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(__file__)))
 
-from utils import optimizer
+from utils import pretty_print as pretty
+
+pretty.init_pretty_error()
+
 from models import (
     Davies2021,
     MLP_PINN,
-    M2,
-    M2_1,
-    M4,
-    M4_1,
-    MLP_GPINN,
-    MLP_GPINN_LambdaAdaptive,
-    LambdaAdaptive_G_PINN,
-    LambdaAdaptive,
-    G_PINN,
-    PINN,
-    M4_1_GPINN,
-    M4_1_GPINN_RAR,
-    M4_1_RAR,
-    MLP_PINN_RAR,
-    M2_1_RAR,
-    M2_RAR,
-    M4_RAR,
-    MLP_GPINN_RAR,
-    ResidualAdaptive,
 )
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
@@ -36,30 +23,10 @@ import time
 import argparse
 import torch
 from torch import nn
-import torch_optimizer
-from torch.nn.init import calculate_gain
-
-
-DATASET_TYPE_SDF_FROM_STL = 0
-DATASET_TYPE_SDF_FROM_NPZ = 1
+from pathlib import Path
 
 MODEL_TYPE_DAVIES_2021 = 1
 MODEL_TYPE_MLP_PINN = 2
-MODEL_TYPE_M2 = 3
-MODEL_TYPE_M2_1 = 4
-MODEL_TYPE_M4 = 5
-MODEL_TYPE_M4_1 = 6
-MODEL_TYPE_MLP_GPINN = 7
-MODEL_TYPE_MLP_GPINN_ADAPTIVE = 8
-MODEL_TYPE_MLP_PINN_RAR = 9
-MODEL_TYPE_M4_1_GPINN = 10
-MODEL_TYPE_M4_1_RAR = 11
-MODEL_TYPE_M4_1_GPINN_RAR = 12
-MODEL_TYPE_MLP_GPINN_RAR = 13
-MODEL_TYPE_M2_RAR = 14
-MODEL_TYPE_M2_1_RAR = 15
-MODEL_TYPE_M4_RAR = 16
-
 
 def MyParser():
     epilog = """
@@ -84,18 +51,18 @@ Optimizers:
     4: Yogi
 
 Examples:
-    python train.py ./dataset/box_1.0_1000_1e6.stl --max_epochs 2500 --model 1 --optimizer 2
+    python train.py ./dataset/box_1f0_gyroid_4pi --max_epochs 2500 --model 1 --optimizer 2
 """
     parser = argparse.ArgumentParser(
         prog="train.py",
         add_help=False,
-        description="Train model to predict sdf from implicit function",
+        description="Train model to predict sdf and test",
         epilog=epilog,
         formatter_class=argparse.RawTextHelpFormatter,
     )
     # data specific
     parser.add_argument(
-        "train_data",
+        "dataset_path",
         help="STL mesh for model 1 or npz file for other model",
         default=None,
     )
@@ -111,49 +78,15 @@ Examples:
         default=3000,
     )
     parser.add_argument("-m", "--model", type=int, help="Model type (see the list below)", default=1)
-    parser.add_argument("-S", "--num_hidden_size", type=int, default=32)
-    parser.add_argument("-L", "--num_layers", type=int, default=8)
-    parser.add_argument("--optimizer", help="Optimizer (see the list below)", type=int, default=2)
-    parser.add_argument(
-        "--loss_lambda",
-        nargs="+",
-        help="Array of lambda",
-        type=float,
-        default=[1.0, 1.0, 0.01],
-    )
-    parser.add_argument("--sampling_method", help="", type=str, default="Importance")
-    parser.add_argument("--number_sampling_points", type=int, default=int(1e4))
-    parser.add_argument("--number_sampling_weight", type=int, default=10)
-    parser.add_argument(
-        "--number_initial_uniform_points",
-        help="Used in importance sampling",
-        type=int,
-        default=int(1e6),
-    )
-    parser.add_argument(
-        "--importance_weight",
-        help="0: uniform sampling, inf: surface sampling",
-        type=int,
-        default=20,
-    )
+    parser.add_argument("--batch_size", type=int, help="Batch size (default: 10,000)", default=10000)
+    parser.add_argument("--lr_step", type=int, help="number of steps per learning rate", default=100)
     parser.add_argument("--device", default=None)
     parser.add_argument("--write_out_epochs", type=int, default=100)
-    parser.add_argument("--lr_step", help="step to set new learning rate", type=int, default=0)
-    parser.add_argument("--lr", help="Learning rate", type=float, default=0.001)
-    parser.add_argument("--adaptive_lambda_step", type=int, default=25)
-    parser.add_argument("--adaptive_residual_points", type=int, default=int(1e4))
-    parser.add_argument("--adaptive_residual_epoch", type=int, default=2000)
-    parser.add_argument(
-        "--log_dir",
-        help="logging directory (default: ./runs",
-        type=str,
-        default="./runs/",
-    )
+    parser.add_argument("--log_dir", help="logging directory (default: ./runs)", type=str, default="./runs/")
     parser.add_argument("--json", help="Export JSON log", default="")
     parser.add_argument("--disable_log", help="Disable logging", action="store_true", default=False)
     parser.add_argument("--quiet", help="Disable verbose", action="store_true", default=False)
     return parser
-
 
 def list_device():
     class customAction(argparse.Action):
@@ -168,355 +101,182 @@ def list_device():
 
     return customAction
 
+def assert_dataset_path(path: str) -> None:
+    assert path is not None, 'Path cannot be None'
+    stl_file = os.path.join(path, 'raw.stl')
+    train_file = os.path.join(path, 'train.npz')
+    test_file = os.path.join(path, 'test.npz')
+
+    assert os.path.exists(stl_file), f'{stl_file} didnot exist'
+    assert os.path.exists(train_file), f'{train_file} didnot exist'
+    assert os.path.exists(test_file), f'{test_file} didnot exist'
 
 def main(*argv):
     parser = MyParser()
     args = parser.parse_args(*argv)
-
-    if len(args.loss_lambda) < 3:
-        args.loss_lambda += [0.0, 0.0, 0.0]
-        args.loss_lambda = args.loss_lambda[:3]
 
     if args.device is not None:
         device = args.device
     else:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     torch.set_default_dtype(torch.float32)
-    train_data_filename, train_data_ext = os.path.splitext(os.path.basename(args.train_data))
+    
+    assert_dataset_path(args.dataset_path)
+
+    dataset_name = Path(args.dataset_path).stem
     experiment_name = str(int(time.time()))
 
+    if not args.quiet:
+        print('Dataset name: ', end='')
+        pretty.pprint(dataset_name, color=pretty.BRIGHT_GREEN)
+        print('Experiment name: ', end='')
+        pretty.pprint(experiment_name, color=pretty.BRIGHT_BLUE)
+
     # initialize TensorboardX
+    logdir = os.path.join(args.log_dir, f"model_{args.model}", dataset_name)
     writer_config = {
-        "logdir": os.path.join(args.log_dir, f"model_{args.model}", os.path.basename(train_data_filename)),
+        "logdir": logdir,
         "write_to_disk": False if args.disable_log else True,
     }
 
     # initialize neural network model
-    kwargs = {"N_layers": args.num_layers, "width": args.num_hidden_size, "activation": nn.ELU()}
+    nn_kwargs = {"N_layers": 8, "width": 32, "activation": nn.Softplus(32), "last_activation": nn.Softplus(30)}
     if args.model == MODEL_TYPE_DAVIES_2021:
-        net = Davies2021(N_layers=args.num_layers, width=args.num_hidden_size).to(device)
+        net = Davies2021(**nn_kwargs).to(device)
     elif args.model == MODEL_TYPE_MLP_PINN:
-        net = MLP_PINN(loss_lambda=args.loss_lambda, **kwargs).to(device)
-    elif args.model == MODEL_TYPE_M2:
-        net = M2(alpha=0.9, **kwargs).to(device)
-    elif args.model == MODEL_TYPE_M2_1:
-        net = M2_1(alpha=0.9, **kwargs).to(device)
-    elif args.model == MODEL_TYPE_M4:
-        net = M4(alpha=0.9, **kwargs).to(device)
-    elif args.model == MODEL_TYPE_M4_1:
-        net = M4_1(alpha=0.9, **kwargs).to(device)
-    elif args.model == MODEL_TYPE_MLP_GPINN:
-        net = MLP_GPINN(loss_lambda=args.loss_lambda, **kwargs).to(device)
-    elif args.model == MODEL_TYPE_MLP_GPINN_ADAPTIVE:
-        net = MLP_GPINN_LambdaAdaptive(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_MLP_PINN_RAR:
-        net = MLP_PINN_RAR(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_M4_1_GPINN:
-        net = M4_1_GPINN(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_M4_1_RAR:
-        net = M4_1_RAR(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_M4_1_GPINN_RAR:
-        net = M4_1_GPINN_RAR(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_MLP_GPINN_RAR:
-        net = MLP_GPINN_RAR(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_M2_RAR:
-        net = M2_RAR(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_M2_1_RAR:
-        net = M2_1_RAR(**kwargs).to(device)
-    elif args.model == MODEL_TYPE_M4_RAR:
-        net = M4_RAR(**kwargs).to(device)
+        net = MLP_PINN(**nn_kwargs).to(device)
     else:
         raise ValueError("model must be 1-16")
 
     # Load train data
-    from utils import RandomMeshSDFDataset, ImplicitDataset, TestDataset, SliceDataset
+    from utils.dataset_generator import ImplicitDataset, TestDataset, run_batch, batch_loader
+    from utils.iou import test_iou
+    
+    stl_file = os.path.join(args.dataset_path, 'raw.stl')
+    train_file = os.path.join(args.dataset_path, 'train.npz')
+    test_file = os.path.join(args.dataset_path, 'test.npz')
 
-    if train_data_ext == ".stl":
-        dataset_type = DATASET_TYPE_SDF_FROM_STL
-        output_stl = args.train_data
-        train_dataset = RandomMeshSDFDataset(
-            output_stl,
-            sampling_method="importance",
-            N=args.number_sampling_points,
-            M=args.number_initial_uniform_points,
-            W=args.number_sampling_weight,
-            device=device,
-        )
-    elif train_data_ext == "" or train_data_ext is None or train_data_ext == ".npz":
-        dataset_type = DATASET_TYPE_SDF_FROM_NPZ
-        output_stl = os.path.join(os.path.dirname(args.train_data), train_data_filename + ".stl")
-        if train_data_ext == ".npz" and '_train' in train_data_filename:
-            train_data_filename = train_data_filename.replace('_train', '')
-        train_dataset = ImplicitDataset.from_file(
-            file=os.path.join(os.path.dirname(args.train_data), train_data_filename + "_train.npz"), device=device
-        )
-    else:
-        raise ValueError("train_data must be either .stl or .npz")
+    train_dataset = ImplicitDataset.from_file(file=train_file, device=device)
     if not args.quiet:
         print(train_dataset)
 
-    # Optimizer
-    from utils.optimizer import CallbackScheduler
+    from utils.callback_scheduler import CallbackScheduler
 
-    if args.lr_step == 0:
-        args.lr_step = int(args.max_epochs / 5)
-    if args.optimizer == 1:
-        optimizer = torch.optim.LBFGS(
-            net.parameters(),
-            lr=args.lr,
-            max_iter=20,
-            max_eval=40,
-            tolerance_grad=1e-5,
-            tolerance_change=1e-9,
+    # Optimization
+    torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+    optimizer=torch.optim.Adam(net.parameters(), lr=0.0005, betas=(0.9, 0.999), eps=1e-6, amsgrad=False)
+    lr_scheduler = CallbackScheduler([
+        CallbackScheduler.reduce_lr(0.5),
+        CallbackScheduler.nothing(),
+        CallbackScheduler.reduce_lr(0.5),
+        CallbackScheduler.nothing(),
+        CallbackScheduler.init_LBFGS(
+            lr=0.01, max_iter=20, max_eval=40, 
+            tolerance_grad=1e-5, tolerance_change=1e-9,
             history_size=100,
-            line_search_fn=None,
-        )
-        lr_scheduler = CallbackScheduler(
-            [
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-            ],
-            optimizer=optimizer,
-            model=net,
-            eps=1e-7,
-            patience=int(args.lr_step * 0.5),
-        )
-    elif args.optimizer == 2:
-        optimizer = torch.optim.Adam(net.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-6, amsgrad=False)
-        lr_scheduler = CallbackScheduler(
-            [
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.init_LBFGS(
-                    lr=0.5,
-                    max_iter=20,
-                    max_eval=40,
-                    tolerance_grad=1e-5,
-                    tolerance_change=1e-9,
-                    history_size=100,
-                    line_search_fn=None,
-                ),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-            ],
-            optimizer=optimizer,
-            model=net,
-            eps=1e-7,
-            patience=int(args.lr_step * 0.5),
-        )
-    elif args.optimizer == 3:
-        optimizer = torch_optimizer.AdaBound(net.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-6, amsbound=False)
-        lr_scheduler = CallbackScheduler(
-            [],
-            optimizer=optimizer,
-            model=net,
-            eps=1e-7,
-            patience=int(args.lr_step * 0.5),
-        )
-    elif args.optimizer == 4:
-        optimizer = torch_optimizer.Yogi(net.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-6)
-        lr_scheduler = CallbackScheduler(
-            [
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-            ],
-            optimizer=optimizer,
-            model=net,
-            eps=1e-7,
-            patience=int(args.lr_step * 0.5),
-        )
-    else:
-        optimizer = torch.optim.Adam(net.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-6, amsgrad=False)
-        lr_scheduler = CallbackScheduler(
-            [
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-                CallbackScheduler.reduce_lr(0.33),
-            ],
-            optimizer=optimizer,
-            model=net,
-            eps=1e-7,
-            patience=int(args.lr_step * 0.5),
-        )
-
+            line_search_fn=None
+        ),
+        CallbackScheduler.nothing(),
+    ], optimizer=optimizer, model=net, eps=1e-7, patience=300)
+    
     if not args.disable_log:
         writer = SummaryWriter(**writer_config)
 
-    residual_points = train_dataset.points if dataset_type == DATASET_TYPE_SDF_FROM_STL else train_dataset.pde_points
-    residual_points.requires_grad_(True)
-    bc_points = train_dataset.points if dataset_type == DATASET_TYPE_SDF_FROM_STL else train_dataset.bc_points
-    bc_sdfs = train_dataset.sdfs if dataset_type == DATASET_TYPE_SDF_FROM_STL else train_dataset.bc_sdfs
+    # residual_points = train_dataset.points if dataset_type == DATASET_TYPE_SDF_FROM_STL else train_dataset.pde_points
+    # residual_points.requires_grad_(True)
+    # bc_points = train_dataset.points if dataset_type == DATASET_TYPE_SDF_FROM_STL else train_dataset.bc_points
+    # bc_sdfs = train_dataset.sdfs if dataset_type == DATASET_TYPE_SDF_FROM_STL else train_dataset.bc_sdfs
+    # NUM_BATCH = int(ceil(len(train_dataset.points) / args.batch_size))
+    MAX_EPOCHS = int(args.lr_step * (len(lr_scheduler)+1))
+    SAVE_MODEL_EVERY_EPOCH = MAX_EPOCHS // 10
+    #NUM_TRAIN_SAMPLES = len(train_dataset)
+
     try:
-        for epoch in tqdm(range(args.max_epochs), disable=args.quiet):
-            # Training
-            optimizer.zero_grad()
-            if isinstance(net, G_PINN) or isinstance(net, PINN):
-                y = net(residual_points)
-                loss = net.loss(
-                    y,
-                    residual_points,
-                    bc_points,
-                    bc_sdfs
-                )
-            else:
-                loss = net.loss(bc_points, bc_sdfs)
-            loss.backward(retain_graph=True)
-
-            lr_scheduler.optimizer.step(lambda: loss)
-            lr_scheduler.step_when((epoch % args.lr_step) == args.lr_step - 1)
-            lr_scheduler.step_loss(loss)
-
-            if isinstance(net, LambdaAdaptive) and (
-                (epoch % args.adaptive_lambda_step) == args.adaptive_lambda_step - 1
-            ):
-                y = net(residual_points)
-                net.adaptive_lambda(
-                    y,
-                    residual_points,
-                    bc_points,
-                    bc_sdfs,
-                )
-
-            if isinstance(net, ResidualAdaptive) and (epoch == args.adaptive_residual_epoch):
-                if dataset_type == DATASET_TYPE_SDF_FROM_STL:
-                    extra_points = net.adjust_samples_from_residual(
-                        net(residual_points), residual_points, num_samples=args.adaptive_residual_points
-                    )
-                    residual_points = torch.cat((residual_points, extra_points))
+        for epoch in tqdm(range(MAX_EPOCHS), disable=args.quiet):
+            
+            for points, sdfs in batch_loader(train_dataset.points, train_dataset.sdfs, batch_size=args.batch_size):
+                
+                lr_scheduler.optimizer.zero_grad()
+                loss = net.loss(points, sdfs)
+                loss.backward()
+                lr_scheduler.optimizer.step(lambda: loss)
+            
+            lr_scheduler.step_when((epoch % args.lr_step) == args.lr_step - 1, verbose=False)
 
             if not args.disable_log:
-                if args.model == 1:
-                    writer.add_scalar(
-                        experiment_name + "/training_loss/loss",
-                        net._loss,
-                        global_step=epoch,
-                    )
-                elif isinstance(net, G_PINN):
-                    writer.add_scalars(
-                        experiment_name + "/training_loss",
-                        {
-                            "loss": net._loss,
-                            "PDE": net._loss_PDE,
-                            "SDF": net._loss_SDF,
-                            "gradient_PDE": net._loss_gradient_PDE,
-                        },
-                        global_step=epoch,
-                    )
-                elif isinstance(net, PINN):
-                    writer.add_scalars(
-                        experiment_name + "/training_loss",
-                        {"loss": net._loss, "PDE": net._loss_PDE, "SDF": net._loss_SDF},
-                        global_step=epoch,
-                    )
-                if isinstance(net, LambdaAdaptive_G_PINN):
-                    writer.add_scalars(
-                        experiment_name + "/loss_lambda",
-                        {
-                            "lambda_1": net.loss_lambda[0],
-                            "lambda_2": net.loss_lambda[1],
-                            "lambda_3": net.loss_lambda[2],
-                        },
-                        global_step=epoch,
-                    )
-                elif isinstance(net, LambdaAdaptive):
-                    writer.add_scalars(
-                        experiment_name + "/loss_lambda",
-                        {
-                            "lambda_1": net.loss_lambda[0],
-                            "lambda_2": net.loss_lambda[1],
-                        },
-                        global_step=epoch,
-                    )
+                keys = [
+                    "_loss",
+                    "_loss_SDF",
+                    "_loss_residual",
+                    "_loss_residual_constraint",
+                    "_loss_normal",
+                    "_loss_cosine_similarity",
+                ]
+
+                _loss_info = {}
+                for key in keys:
+                    if hasattr(net, key):
+                        _loss_info[key] = getattr(net, key)
+                    if _loss_info[key] is NaN:
+                        raise ValueError('Loss is Nan')
+                
+                if len(_loss_info) > 0:
+                    writer.add_scalars(experiment_name + "/training_loss", _loss_info, global_step=epoch)
                 writer.add_scalar(experiment_name + "/lr", lr_scheduler.lr, global_step=epoch)
-                writer.add_scalar(experiment_name + "/cuda_memory", torch.cuda.memory_allocated(device))
+                #writer.add_scalar(experiment_name + "/cuda_memory", torch.cuda.memory_allocated(device))
+
+                if epoch > 0 and (epoch % SAVE_MODEL_EVERY_EPOCH == 0):
+                    torch.save(net.state_dict(), os.path.join(logdir, experiment_name, f'{epoch}.pth'))
             # endif disable_log
         # endfor epoch
+        torch.save(net.state_dict(), os.path.join(logdir, experiment_name, f'{MAX_EPOCHS}.pth'))
+
+        # Evaluation after training
+        test_dataset = TestDataset(test_file, device=device)
+        test_kwarg = {'reducer': torch.mean, 'batch_size': args.batch_size}
 
         if not args.disable_log:
             experiment_info_dict = {
-                "lr": args.lr,
-                "lr_step": args.lr_step,
                 "model": args.model,
-                "max_epochs": args.max_epochs,
-                "num_layers": args.num_layers,
-                "num_hiddens": args.num_hidden_size,
-                "sampling_method": args.sampling_method,
-                "importance_weight": args.importance_weight,
-                "train_data": args.train_data,
-                "train_dataset": str(train_dataset),
-                "optimizer": args.optimizer,
-                "loss_lambda": str(args.loss_lambda),
-                "adaptive_residual_points": args.adaptive_residual_points,
-                "adaptive_residual_epoch": args.adaptive_residual_epoch,
+                "lr_step": args.lr_step,
+                "max_epochs": MAX_EPOCHS,
+                "dataset_name": dataset_name,
+                "experiment_name": experiment_name,
+                #"lr": args.lr,
+                #"num_layers": args.num_layers,
+                #"num_hiddens": args.num_hidden_size,
+                #"sampling_method": args.sampling_method,
+                #"importance_weight": args.importance_weight,
+                #"train_dataset": str(train_dataset),
+                #"optimizer": args.optimizer,
+                #"loss_lambda": str(args.loss_lambda),
+                #"adaptive_residual_points": args.adaptive_residual_points,
+                #"adaptive_residual_epoch": args.adaptive_residual_epoch,
             }
 
-            if dataset_type == DATASET_TYPE_SDF_FROM_STL:
-                test_dataset = RandomMeshSDFDataset(output_stl, sampling_method="uniform", N=1000000, device=device)
-                error_uniform = net.test(test_dataset.points, test_dataset.sdfs)
-                test_dataset = RandomMeshSDFDataset(
-                    output_stl,
-                    sampling_method="point",
-                    N=1000000,
-                    ratio=0.1,
-                    device=device,
-                )
-                error_random_point = net.test(test_dataset.points, test_dataset.sdfs)
-                error_gradient = torch.finfo(torch.float32).max
-            elif dataset_type == DATASET_TYPE_SDF_FROM_NPZ:
-                test_dataset = TestDataset(
-                    os.path.join(os.path.dirname(args.train_data), train_data_filename + "_test.npz"), device=device
-                )
-                error_uniform = net.test(test_dataset.points, test_dataset.sdfs)
-                error_gradient = net.test_gradient(test_dataset.points, test_dataset.gradients)
-                error_random_point = net.test(test_dataset.random_points, test_dataset.random_sdfs)
-
-            writer.add_hparams(
-                experiment_info_dict,
-                {
-                    "hparam/loss_uniform": error_uniform,
-                    "hparam/loss_random_point": error_random_point,
-                    "hparam/loss_gradient": error_gradient,
-                },
-                name=experiment_name,
-            )
-
-            from utils import SDFVisualize
-
-            visualize = SDFVisualize(
-                z_level=0,
-                step=0.05,
-                offset=30,
-                nums=100,
-                writer=writer,
-                tag=experiment_name,
-            )
-
-            if os.path.exists(output_stl):
-                visualize.from_nn(net, bounds_from_mesh=output_stl, device=device)
-                visualize.from_mesh(output_stl)
-            elif DATASET_TYPE_SDF_FROM_NPZ:
-                slice_file = os.path.join(os.path.dirname(args.train_data), train_data_filename + "_slice.npz")
-                if os.path.exists(slice_file):
-                    visualize.from_dataset(net, slice_file)
-        # endif disable_log
+        writer.add_hparams(
+            experiment_info_dict,
+            {
+                "hparam/loss_uniform_sdf": run_batch(net.test, test_dataset.uniform.points, test_dataset.uniform.sdfs, **test_kwarg).cpu().detach().numpy(),
+                "hparam/loss_uniform_residual": run_batch(net.test_residual, test_dataset.uniform.points, **test_kwarg).cpu().detach().numpy(),
+                "hparam/loss_uniform_norm_grads": run_batch(net.test_norm_gradient, test_dataset.uniform.points, test_dataset.uniform.norm_grads, **test_kwarg).cpu().detach().numpy(),
+                "hparam/loss_random_sdf": run_batch(net.test, test_dataset.random.points, test_dataset.random.sdfs, **test_kwarg).cpu().detach().numpy(),
+                "hparam/loss_random_residual": run_batch(net.test_residual, test_dataset.random.points, **test_kwarg).cpu().detach().numpy(),
+                "hparam/iou": test_iou(net, test_dataset.uniform.points, test_dataset.uniform.sdfs, batch_size=args.batch_size).cpu().detach().numpy(),
+            },
+            name=experiment_name,
+        )
+        # End evaluation
 
     except KeyboardInterrupt as e:
-        print("Bye bye")
+        print('Bye bye')
 
     finally:
         if len(args.json) > 0:
             writer.export_scalars_to_json(args.json)
         if not args.disable_log:
             writer.close()
-    # end try-except
+    #end try-except
 
 
 if __name__ == "__main__":

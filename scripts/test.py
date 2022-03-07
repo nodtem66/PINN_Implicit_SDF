@@ -12,6 +12,7 @@ def main():
         import numpy as np
         import torch
         import tensorboardX
+        import tensorboard
         import sdf
         import PyScaffolder
         import matplotlib

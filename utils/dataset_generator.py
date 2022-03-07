@@ -459,10 +459,12 @@ class TestDataset():
 def generate_dataset(f, name=None, N_train=1e4, N_test=1e5, N_slice=100, save_dir=os.getcwd(), verbose=True) -> None:
     if name is None:
         name = 'tmp_' + os.urandom(6).hex()
-    output_stl = os.path.join(save_dir, name + '.stl')
-    output_train_npz = os.path.join(save_dir, name + '_train.npz')
-    output_test_npz = os.path.join(save_dir, name + '_test.npz')
-    output_slice_npz = os.path.join(save_dir, name + '_slice.npz')
+    
+    os.makedirs(os.path.join(save_dir, name), exist_ok=True)
+    output_stl = os.path.join(save_dir, name, 'raw.stl')
+    output_train_npz = os.path.join(save_dir, name, 'train.npz')
+    output_test_npz = os.path.join(save_dir, name, 'test.npz')
+    output_slice_npz = os.path.join(save_dir, name, 'slice.npz')
     print(f'Saved file at {output_stl}')
     
     # Generate train dataset
@@ -589,14 +591,16 @@ def run_batch(callback, *args, reducer=None, **kwarg):
     tensor(2., device='cuda:0')
     ```
     """
-    #is_self = 'self' in callback.__code__.co_varnames
-    #callback_args_count = callback.__code__.co_argcount - (1 if is_self else 0) 
-    #if callback_args_count != len(args):
-    #    print(f'[warning] The number of arguments of callback have to match input arguments: {callback_args_count} != {len(args)}')
-    
+     
     result = [callback(*x) for x in batch_loader(*args, **kwarg)]
     if isinstance(args[0], torch.Tensor):
         assert hasattr(args[0], 'device'), 'torch.Tensor should have device attribute'
-        result = torch.tensor(result, device=args[0].device)
+        if len(result) > 0:
+            # case: result.shape = tensor.Size([])
+            # convert to tensor
+            if len(result[0].shape) == 0:
+                result = torch.tensor(result, device=args[0].device)
+            else:
+                result = torch.hstack(result)
     
     return result if reducer is None else reducer(result)
