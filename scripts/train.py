@@ -28,6 +28,9 @@ from pathlib import Path
 MODEL_TYPE_DAVIES_2021 = 1
 MODEL_TYPE_MLP_PINN = 2
 
+INIT_TYPE_FMM = 1
+INIT_TYPE_SDF = 2
+
 def MyParser():
     epilog = """
 Model Type:
@@ -44,14 +47,17 @@ Model Type:
     11: M4_1_RAR
     12: M4_1_GPINN_RAR
 
-Optimizers:
-    1: Adam
-    2: Adam + L-BFGS
-    3: AdaBound
-    4: Yogi
+Training dataset initialization:
+    1: FMM (Fast marching method)
+    2: SDF (Signed distance function)
+
+Optimizer:
+    1: ADAM (15 steps of Reduced LR policy)
+    2: ADAM (4 steps of Reduced LR policy)
+    3: ADAM/LBFGS ()
 
 Examples:
-    python train.py ./dataset/box_1f0_gyroid_4pi --max_epochs 2500 --model 1 --optimizer 2
+    python train.py ./dataset/box_1f0_gyroid_4pi --max_epochs 2500 --model 1 --init 1 --optimizer 1
 """
     parser = argparse.ArgumentParser(
         prog="train.py",
@@ -78,6 +84,8 @@ Examples:
         default=3000,
     )
     parser.add_argument("-m", "--model", type=int, help="Model type (see the list below)", default=1)
+    parser.add_argument("--init", type=int, help="Initialzation type (see the list below)", default=1)
+    parser.add_argument("--optimizer", type=int, help="Optimizer type (see the list below)", default=1)
     parser.add_argument("--batch_size", type=int, help="Batch size (default: 10,000)", default=10000)
     parser.add_argument("--lr_step", type=int, help="number of steps per learning rate", default=100)
     parser.add_argument("--device", default=None)
@@ -165,19 +173,77 @@ def main(*argv):
     # Optimization
     torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
     optimizer=torch.optim.Adam(net.parameters(), lr=0.0005, betas=(0.9, 0.999), eps=1e-6, amsgrad=False)
-    lr_scheduler = CallbackScheduler([
-        CallbackScheduler.reduce_lr(0.5),
-        CallbackScheduler.nothing(),
-        CallbackScheduler.reduce_lr(0.5),
-        CallbackScheduler.nothing(),
-        CallbackScheduler.init_LBFGS(
-            lr=0.01, max_iter=20, max_eval=40, 
-            tolerance_grad=1e-5, tolerance_change=1e-9,
-            history_size=100,
-            line_search_fn=None
-        ),
-        CallbackScheduler.nothing(),
-    ], optimizer=optimizer, model=net, eps=1e-7, patience=300)
+    if args.optimizer == 1:
+        lr_scheduler = CallbackScheduler([
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+        ], optimizer=optimizer, model=net, eps=1e-7, patience=300)
+    elif args.optimizer == 2:
+        lr_scheduler = CallbackScheduler([
+            CallbackScheduler.reduce_lr(0.2),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.2),
+            CallbackScheduler.nothing(),
+        ], optimizer=optimizer, model=net, eps=1e-7, patience=300)
+    elif args.optimizer == 3:
+        lr_scheduler = CallbackScheduler([
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.init_LBFGS(
+                lr=0.001, max_iter=30, max_eval=60, 
+                tolerance_grad=1e-5, tolerance_change=1e-9,
+                history_size=100,
+                line_search_fn=None
+            ),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+        ], optimizer=optimizer, model=net, eps=1e-7, patience=300)
+    elif args.optimizer == 4:
+        lr_scheduler = CallbackScheduler([
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.reduce_lr(0.5),
+            CallbackScheduler.nothing(),
+            CallbackScheduler.nothing(),
+        ], optimizer=optimizer, model=net, eps=1e-7, patience=300)
+    else:
+        raise ValueError(f"Invalid --optimizer {args.optimizer}")
     
     if not args.disable_log:
         writer = SummaryWriter(**writer_config)
@@ -194,7 +260,13 @@ def main(*argv):
     try:
         for epoch in tqdm(range(MAX_EPOCHS), disable=args.quiet):
             
-            for points, sdfs in batch_loader(train_dataset.points, train_dataset.sdfs, batch_size=args.batch_size):
+            batch_data = batch_loader(
+                train_dataset.points,
+                train_dataset.sdfs if args.init == INIT_TYPE_FMM else train_dataset.true_sdfs, 
+                batch_size=args.batch_size
+            )
+
+            for points, sdfs in batch_data:
                 
                 lr_scheduler.optimizer.zero_grad()
                 loss = net.loss(points, sdfs)
@@ -217,13 +289,13 @@ def main(*argv):
                 for key in keys:
                     if hasattr(net, key):
                         _loss_info[key] = getattr(net, key)
-                    if _loss_info[key] is NaN:
-                        raise ValueError('Loss is Nan')
+                        if _loss_info[key] is NaN:
+                            raise ValueError('Loss is Nan')
                 
                 if len(_loss_info) > 0:
                     writer.add_scalars(experiment_name + "/training_loss", _loss_info, global_step=epoch)
-                writer.add_scalar(experiment_name + "/lr", lr_scheduler.lr, global_step=epoch)
-                #writer.add_scalar(experiment_name + "/cuda_memory", torch.cuda.memory_allocated(device))
+                writer.add_scalar(experiment_name + "/lr", lr_scheduler.lr, global_step=epoch, display_name='Learning rate')
+                writer.add_scalar(experiment_name + "/cuda_memory_GB", torch.cuda.memory_allocated(device)/(1.0e9),  global_step=epoch, display_name='CUDA memory (GB)')
 
                 if epoch > 0 and (epoch % SAVE_MODEL_EVERY_EPOCH == 0):
                     torch.save(net.state_dict(), os.path.join(logdir, experiment_name, f'{epoch}.pth'))

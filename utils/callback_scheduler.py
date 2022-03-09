@@ -61,10 +61,10 @@ class CallbackScheduler():
                 self._callback[self._step](self)
         self._step += 1
 
-    def set_lr(self, ratio=1.0):
+    def set_lr(self, lr=1.0):
         for g in self.optimizer.param_groups:
-            g['lr'] = ratio
-        self.lr = ratio
+            g['lr'] = lr
+        self.lr = lr
 
     def LBFGS(self, **vargs):
         self.optimizer = torch.optim.LBFGS(

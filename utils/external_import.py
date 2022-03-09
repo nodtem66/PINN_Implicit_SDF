@@ -15,7 +15,7 @@ try:
     try:
         import igl
     except:
-        print("[pyigl_import] module igl not found. trying to import pyigl")
+        #print("[pyigl_import] module igl not found. trying to import pyigl")
         import pyigl as igl
 
 except ImportError as e:
